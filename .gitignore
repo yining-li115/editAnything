@@ -1,0 +1,18 @@
+# SAM 3 is cloned separately on the server and installed via `pip install -e .`
+sam3/
+
+# Model checkpoints (kept outside the repo)
+ckpt/
+*.pt
+*.pth
+*.safetensors
+*.ckpt
+
+# Gradio / runtime temp artifacts
+**/tmp_gradio/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.ipynb_checkpoints/
