@@ -11,6 +11,12 @@ ckpt/
 # Gradio / runtime temp artifacts
 **/tmp_gradio/
 
+# Pipeline run outputs (frames, masks, videos — regenerated, not tracked)
+outputs/
+
+# Local .env (secrets); keep .env.example tracked
+.env
+
 # Python
 __pycache__/
 *.pyc
