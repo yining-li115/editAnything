@@ -1,4 +1,5 @@
 # editAnything 
+
 Replace an object in a video with a described one (e.g. **cup → banana**), across
 the whole clip, decoupling three independent components:
 
@@ -61,6 +62,7 @@ export RIFE_BIN=/path/to/rife-ncnn-vulkan-*/rife-ncnn-vulkan   # default points 
 ```
 
 Checkpoint layout we rely on:
+
 ```
 VideoPainter/ckpt/
 ├── VideoPainter/checkpoints/branch     # CogvideoXBranchModel
@@ -69,6 +71,7 @@ VideoPainter/ckpt/
 ```
 
 Gotchas (learned the hard way):
+
 - **diffusers `outputs.py` missing** → `ModuleNotFoundError: diffusers.utils.outputs`.
   Caused by VideoPainter/.gitignore's broad `output*`/`test*` rules (already fixed
   here to `/output*` / `/test*`). On a fresh checkout that still lacks the file,
@@ -93,15 +96,15 @@ Not used: `app/` (Gradio), `app/sam2*`, `utils.py`'s FLUX path, `ckpt/flux_inp`,
 
 ## Modules (in `src/`)
 
-| File | Stage |
-|---|---|
-| `sam3_track.py` | SAM3 text prompt → per-frame source mask |
-| `gemini_edit.py` | Gemini API → in-place frame edit (the new-object reference) |
-| `anchors.py` | per-segment anchors + target masks (pluggable; see gap below) |
-| `generate.py` | VideoPainter multi-chunk reanchor generation (**models loaded once**) |
-| `composite.py` | feather the object onto a fixed plate (kills chunk-boundary jumps) |
-| `encode.py` | frames → portrait mp4 (+ optional interpolation) |
-| `pipeline.py` | end-to-end orchestrator + CLI |
+| File             | Stage                                                        |
+| ---------------- | ------------------------------------------------------------ |
+| `sam3_track.py`  | SAM3 text prompt → per-frame source mask                     |
+| `gemini_edit.py` | Gemini API → in-place frame edit (the new-object reference)  |
+| `anchors.py`     | per-segment anchors + target masks (pluggable; see gap below) |
+| `generate.py`    | VideoPainter multi-chunk reanchor generation (**models loaded once**) |
+| `composite.py`   | feather the object onto a fixed plate (kills chunk-boundary jumps) |
+| `encode.py`      | frames → portrait mp4 (+ optional interpolation)             |
+| `pipeline.py`    | end-to-end orchestrator + CLI                                |
 
 Outputs land in `outputs/<name>/`.
 
@@ -133,23 +136,26 @@ it exceeds 49 does multi-chunk reanchor kick in (`mode=multi-chunk (k segments)`
 with segment starts auto-derived from the frame count.
 
 **Gemini reference (the edit stage), two modes:**
+
 ```bash
 # A) describe the new object
 python src/gemini_edit.py --image frame_00001.png --out ref.png --source cup --target "a ripe yellow banana"
 # B) supply an image of the exact object you want
 python src/gemini_edit.py --image frame_00001.png --out ref.png --source cup --ref_image my_banana.png
 ```
+
 Needs `pip install google-genai` and `GEMINI_API_KEY` (see `.env.example`).
 
 ## Any-video path (RoMa backend)
 
 `--backend roma` builds, from scratch, both the per-frame edit masks and the
 per-segment anchors from one RoMa pass (`roma_propagate.py`):
+
 - SAM3 segments the new object on `ref0` and the old object on frame 0 →
   frame-0 edit region; RoMa dense-warps it to every frame (follows motion).
 - the whole `ref0` is warped to each segment start → the per-segment anchor.
-Needs only `--ref0` (a frame-0 edit from `gemini_edit.py`). `--backend assets`
-instead loads prepared anchors + masks.
+  Needs only `--ref0` (a frame-0 edit from `gemini_edit.py`). `--backend assets`
+  instead loads prepared anchors + masks.
 
 ## Smoothing (RIFE anchor de-spike)
 
@@ -180,12 +186,66 @@ RoMa backend skips composite (warped-anchor + composite ghosts the hand).
 
 ## Roadmap (agentic)
 
-Goal: make this an **agentic** system — an orchestrator that calls each capability
-on demand instead of one fixed script.
-- Wrap the stages (SAM3 mask, Gemini edit, RoMa propagate, ROSE removal,
-  VideoPainter generate, composite, encode) as **MCP tools**.
-- A **tuning agent** that picks parameters (dilate, segment split, mask shape, …)
-  from feedback on intermediate results.
-- Add **ROSE removal** as a component (clean plate → fixes shadow, enables the
-  original composite path).
-- Orchestrator routes: choose backend, decide when to remove / re-anchor / smooth.
+**Goal:** turn today's fixed script into an **agentic** system — a Gemini
+orchestrator that calls each capability on demand as an MCP tool, runs candidates
+in parallel, and self-corrects from an LLM judge's feedback instead of us
+hand-tuning params. Target architecture (`system_pipeline.png`):
+
+![Target agentic architecture](system_pipeline.png)
+
+What this requires, in build order:
+
+1. **Wrap each stage as an MCP tool** — SAM3 mask, Gemini edit/Imagen asset, RoMa
+   propagate, ROSE removal, VideoPainter generate, composite, encode. Today they
+   are functions chained in `pipeline.py`; the orchestrator needs to call them
+   individually.
+2. **Gemini orchestrator agent** — parses the chat request ("cyberpunk banana" +
+   video) into intent (source object, target object, style), then fans out:
+   SAM tracker and Imagen/Gemini-edit run **in parallel**, and generation starts
+   once both the mask and the asset are ready.
+3. **Parallel model candidates** — run VideoPainter, a ROSE-removal+inpaint path,
+   and future models on the same input concurrently, so the judge can pick the
+   best result rather than us committing to one backend up front.
+4. **LLM judge (Gemini)** — scores each candidate on quality, temporal
+   consistency, and style match against the request; the best score above a
+   threshold is returned, with the score and model surfaced to the user.
+5. **Self-correcting retry loop** — on a below-threshold score, the orchestrator
+   retries (2–3×) by **adjusting params and regenerating** — this is where the
+   **tuning agent** lives, picking `dilate`, segment split, mask shape, etc. from
+   the judge's feedback instead of us tuning them by hand.
+6. **ROSE removal as a component** — a clean-plate removal stage that fixes the
+   leftover source-object shadow (see Known limitations) and re-enables the
+   original composite path.
+
+The current `pipeline.py` is the single-backend, no-judge slice of this: it runs
+the SAM3 → edit → VideoPainter chain end to end with params fixed in
+`config.yaml`. The agentic version keeps these same stages but lets the
+orchestrator choose, parallelize, score, and retry them.
+
+## TODO
+
+What's done vs. still open.
+
+**Done**
+
+- [x] SAM3 text-prompt source mask (`sam3_track.py`)
+- [x] Gemini frame-0 edit / reference (`gemini_edit.py`)
+- [x] RoMa anchor + edit-mask propagation, any-length video (`roma_propagate.py`, `anchors.py`)
+- [x] VideoPainter inpainting-only generation, multi-chunk reanchor, models loaded once (`generate.py`)
+- [x] Composite + portrait encode + RIFE anchor de-spike (`composite.py`, `encode.py`)
+- [x] End-to-end fixed-param pipeline driven by `config.yaml` (`pipeline.py`)
+
+**Open — quality**
+
+- [ ] **Source-object shadow removal** — shadow sits outside the SAM3 mask, so it stays. Add ROSE clean-plate removal, or grow the edit region to repaint it.
+- [ ] **Irregular-hull edit region** — replace the current (target∪source) **bbox** with an alpha-based irregular hull (RoMa-warp → dilate) that hugs the object and covers the shadow.
+
+**Open — agentic system** (see Roadmap)
+
+- [ ] Wrap each stage as an **MCP tool** (SAM3, Gemini edit/Imagen, RoMa, ROSE, VideoPainter, composite, encode)
+- [ ] **Gemini orchestrator agent** — parse chat intent, fan out SAM + asset generation in parallel
+- [ ] **Parallel model candidates** — run VideoPainter / ROSE+inpaint / future models concurrently
+- [ ] **LLM judge (Gemini)** — score quality / temporal consistency / style match, pick best above threshold
+- [ ] **Self-correcting retry loop / tuning agent** — auto-pick `dilate`, segment split, mask shape from judge feedback (2–3× retries)
+- [ ] **ROSE removal component** — clean plate, re-enables the original composite path
+- [ ] **Web demo / API** — return video + score + which model was used
