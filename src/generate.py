@@ -172,9 +172,7 @@ if __name__ == "__main__":
     ap.add_argument("--mask_dir", required=True, help="dir of per-frame masks frame_*.png")
     ap.add_argument("--anchor_dir", required=True, help="dir of per-segment anchors anchor_<start:04d>.png")
     ap.add_argument("--out_dir", required=True)
-    ap.add_argument("--prompt", default="a ripe yellow banana resting on a glossy dark round table, "
-                    "a hand with a ring on the table, smooth reflective tabletop, soft natural light, "
-                    "pale blue-grey wall")
+    ap.add_argument("--prompt", required=True, help="global generation prompt for the edited video")
     ap.add_argument("--segment_starts", default=None,
                     help="comma list, e.g. 0,48,96,144,192,240,251 (default) or a single start for one chunk")
     ap.add_argument("--total", type=int, default=CLIP)

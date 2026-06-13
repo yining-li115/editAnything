@@ -105,21 +105,27 @@ Not used: `app/` (Gradio), `app/sam2*`, `utils.py`'s FLUX path, `ckpt/flux_inp`,
 
 Outputs land in `outputs/<name>/`.
 
-## Run (phase A — reproduces cup2 with prepared assets)
+## Run
+
+All tunable parameters live in **`config.yaml`** — edit it, then:
 
 ```bash
 conda activate videopainter   # /venv/videopainter
 cd editAnything
-python src/pipeline.py \
-  --frames_dir ../cup2_low_extract/cup2_low \
-  --name cup2_run \
-  --source cup --target "a ripe yellow banana" \
-  --backend assets --assets ../exp3_bundle/inputs \
-  --mask_mode target \
-  --out_size 480x832 --fps 25 --interpolate
+HF_HOME=/workspace/.hf_home python src/pipeline.py --config config.yaml
 ```
 
-Single chunk (quick check): add `--segment_starts 0 --stop_after generate`.
+`config.yaml` holds the source/target objects, prompt, backend, paths, segment/
+sampling/output settings (see comments in the file). Any value can be overridden
+on the CLI, e.g. `--name myrun --seed 7`. `HF_HOME` is needed so SAM3 (gated
+`facebook/sam3`) can load.
+
+The general (any-video) path uses `backend: roma` with a frame-0 reference
+(`ref0`, a Gemini edit). RoMa propagates it to produce, from scratch, both the
+per-frame edit masks (target∪source bbox) and the per-segment anchors — no
+prepared assets needed. `backend: assets` instead loads pre-made anchors+masks.
+
+Quick checks: `--stop_after extract|mask|generate` ; one chunk: `--segment_starts 0`.
 
 **Length handling (automatic):** the base model does 49 frames per pass. If the
 video is ≤49 frames the pipeline runs a single pass (`mode=single-pass`); only when
@@ -137,37 +143,49 @@ Needs `pip install google-genai` and `GEMINI_API_KEY` (see `.env.example`).
 
 ## Any-video path (RoMa backend)
 
-The **reanchor** quality needs, per segment, a clean anchor at that viewpoint plus
-a per-frame mask that follows the object. Two backends produce these
-(`--backend`):
+`--backend roma` builds, from scratch, both the per-frame edit masks and the
+per-segment anchors from one RoMa pass (`roma_propagate.py`):
+- SAM3 segments the new object on `ref0` and the old object on frame 0 →
+  frame-0 edit region; RoMa dense-warps it to every frame (follows motion).
+- the whole `ref0` is warped to each segment start → the per-segment anchor.
+Needs only `--ref0` (a frame-0 edit from `gemini_edit.py`). `--backend assets`
+instead loads prepared anchors + masks.
 
-- `assets` — load pre-made anchors + masks (reproduces cup2 from the bundle).
-- `roma` — **general**: warp a frame-0 reference (the Gemini edit) to every
-  viewpoint with RoMa (`roma_propagate.py`). Needs only `--ref0` (frame-0 with the
-  new object placed); it RoMa-matches frame0↔frame_k, warps the object RGB+mask,
-  gates by match certainty → per-frame masks + per-segment anchors. The frame-0
-  object mask is auto-segmented with SAM3 (`--target_word`) unless `--ref0_mask`
-  is given.
+## Smoothing (RIFE anchor de-spike)
 
-```bash
-# any video, from scratch: frame-0 reference -> RoMa -> multi-chunk -> RIFE
-python src/pipeline.py --video my.mp4 --name my_run \
-  --source cup --target "a ripe yellow banana" --target_word banana \
-  --backend roma --ref0 ref0_banana.png \
-  --mask_mode union --interpolate
-```
-(`ref0_banana.png` = a frame-0 edit from `gemini_edit.py`.)
-
-## Smoothing (RIFE)
-
-`--interpolate` writes a 2×-fps `final_interp.mp4`. Backend is **RIFE**
-(rife-ncnn-vulkan, GPU/Vulkan) on the frames; it softens the 1-frame anchor "pop"
-intrinsic to reanchor segment boundaries. Falls back to ffmpeg `minterpolate` if
-the RIFE binary (`RIFE_BIN`) isn't found.
+`--interpolate` replaces each segment-boundary **anchor frame** n with
+`RIFE(frame n-1, frame n+1)` — the warped anchor is a one-frame "pop", so we swap
+it for the motion-midpoint of its neighbours. Native fps unchanged (NOT 2×).
+RIFE = rife-ncnn-vulkan (`RIFE_BIN`).
 
 ## Pipeline / params
 
-Per-segment reanchor (validated exp3): 720×480 work res, 49-frame clips, starts
-`0,48,96,144,192,240,251`, `id_pool_resample_learnable=True`, DPM trailing,
-sequential CPU offload + VAE tiling, `steps=50 guidance=6.0 dilate=12 seed=42`.
-Final video is unsquished back to portrait. ~11 min/segment, ~22 GB peak VRAM.
+Per-segment reanchor: 720×480 work res, 49-frame clips, starts auto
+(`0,48,96,…`, only past 49 frames), `id_pool_resample_learnable=True`, DPM
+trailing, sequential CPU offload + VAE tiling, `steps=50 guidance=6.0 dilate=12
+seed=42`. Final unsquished to portrait. ~11 min/segment, ~22 GB peak VRAM.
+RoMa backend skips composite (warped-anchor + composite ghosts the hand).
+
+## Known limitations
+
+- **Source-object shadow can remain.** The old object's cast shadow lives outside
+  the SAM3 mask, so it is neither in the edit region nor removed. The original
+  pipeline killed it by compositing onto a **ROSE cup-removed plate** (a separate
+  removal stage we don't have). Fixes: (a) grow the edit region (irregular hull +
+  dilate) to cover the shadow so generation repaints it, or (b) add a ROSE removal
+  stage. See Roadmap.
+- Edit region is currently a **bbox** of (target∪source); an **irregular hull**
+  (banana_no_bg-style alpha → RoMa-warp → dilate) hugs the object better and
+  covers the shadow — to be switched in.
+
+## Roadmap (agentic)
+
+Goal: make this an **agentic** system — an orchestrator that calls each capability
+on demand instead of one fixed script.
+- Wrap the stages (SAM3 mask, Gemini edit, RoMa propagate, ROSE removal,
+  VideoPainter generate, composite, encode) as **MCP tools**.
+- A **tuning agent** that picks parameters (dilate, segment split, mask shape, …)
+  from feedback on intermediate results.
+- Add **ROSE removal** as a component (clean plate → fixes shadow, enables the
+  original composite path).
+- Orchestrator routes: choose backend, decide when to remove / re-anchor / smooth.

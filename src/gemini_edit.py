@@ -70,7 +70,7 @@ def _client(api_key=None):
     return genai.Client(api_key=key)
 
 
-def edit_image(image_path, out_path, *, source="cup", target="a ripe yellow banana",
+def edit_image(image_path, out_path, *, source, target=None,
                ref_image=None, instruction=None, model=DEFAULT_MODEL, api_key=None):
     """Edit one frame with Gemini; save the result. Returns out_path.
 
@@ -108,8 +108,8 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser(description="Gemini in-place image edit (object swap)")
     ap.add_argument("--image", required=True, help="input frame to edit")
     ap.add_argument("--out", required=True, help="output edited image path")
-    ap.add_argument("--source", default="cup", help="object to remove")
-    ap.add_argument("--target", default="a ripe yellow banana", help="(mode A) object to insert")
+    ap.add_argument("--source", required=True, help="object to remove (e.g. 'cup')")
+    ap.add_argument("--target", default=None, help="(mode A) object to insert (e.g. 'a ripe yellow banana')")
     ap.add_argument("--ref_image", default=None, help="(mode B) image of the object to insert")
     ap.add_argument("--instruction", default=None, help="override the full edit instruction")
     ap.add_argument("--model", default=DEFAULT_MODEL)

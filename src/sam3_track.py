@@ -1,13 +1,13 @@
 """SAM3 text-prompt tracking -> per-frame source-object mask (decoupled).
 
-Generates the mask for the object to be REPLACED (e.g. "cup") across a folder of
+Generates the mask for the object to be REPLACED across a folder of
 frames, at the frames' native resolution, written as frame_*.png (0/255). This is
 fully standalone: VideoPainter never calls SAM3 — the masks are produced here as
 files and later fed to generate via --mask_dir.
 
 Note on the final mask: generate needs the edit region to cover BOTH the old
-object and the new one. This module produces only the source-object (cup) mask;
-the target-object (banana) region comes from anchors, and the pipeline unions
+object and the new one. This module produces only the source-object mask;
+the target-object region comes from anchors, and the pipeline unions
 them. Dilation is applied later inside generate (--dilate), not here.
 """
 import os
@@ -91,7 +91,7 @@ if __name__ == "__main__":
     import argparse
     ap = argparse.ArgumentParser(description="SAM3 text-prompt per-frame mask")
     ap.add_argument("--frames_dir", required=True)
-    ap.add_argument("--text", required=True, help="object to segment, e.g. 'cup'")
+    ap.add_argument("--text", required=True, help="object to segment (e.g. the object to remove)")
     ap.add_argument("--out_mask_dir", required=True)
     args = ap.parse_args()
     track(build_predictor(), args.frames_dir, args.text, args.out_mask_dir)

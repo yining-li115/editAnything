@@ -24,6 +24,7 @@ import glob
 import shutil
 import subprocess
 import argparse
+import yaml
 import numpy as np
 import cv2
 
@@ -85,15 +86,14 @@ def union_masks(source_dir, target_dir, out_dir):
 
 def main():
     ap = argparse.ArgumentParser(description="End-to-end video object replacement")
-    # inputs
+    ap.add_argument("--config", help="YAML config file; its values become defaults, CLI flags override")
+    # inputs (required, from config or CLI)
     ap.add_argument("--video", help="input video (or use --frames_dir)")
     ap.add_argument("--frames_dir", help="pre-extracted frames frame_00001.png... (skip extraction)")
-    ap.add_argument("--source", default="cup", help="object to remove (SAM3 prompt)")
-    ap.add_argument("--target", default="a ripe yellow banana", help="object to insert")
-    ap.add_argument("--prompt", default="a ripe yellow banana resting on a glossy dark round table, "
-                    "a hand with a ring on the table, smooth reflective tabletop, soft natural light, "
-                    "pale blue-grey wall", help="global CogVideoX prompt")
-    ap.add_argument("--name", required=True, help="run name -> outputs/<name>/")
+    ap.add_argument("--source", help="OLD object to remove — SAM3 noun (e.g. 'cup')")
+    ap.add_argument("--target", help="NEW object description (e.g. 'a ripe yellow banana')")
+    ap.add_argument("--prompt", help="global generation prompt for the edited video")
+    ap.add_argument("--name", help="run name -> outputs/<name>/")
     # anchors / masks
     ap.add_argument("--backend", default="assets", choices=["assets", "roma"])
     ap.add_argument("--assets", help="assets dir for backend=assets (anchors/ + banana_masks/)")
@@ -111,9 +111,13 @@ def main():
     ap.add_argument("--guidance", type=float, default=6.0)
     ap.add_argument("--seed", type=int, default=42)
     # output
+    ap.add_argument("--out_root", default=None,
+                    help="base dir for outputs (default: the repo dir -> editAnything/outputs/<name>)")
     ap.add_argument("--out_size", default=None, help="final WxH (default = native frame size)")
     ap.add_argument("--fps", type=int, default=25)
-    ap.add_argument("--interpolate", action="store_true")
+    ap.add_argument("--interpolate", action="store_true",
+                    help="RIFE de-spike: replace each segment-boundary anchor frame with "
+                         "RIFE(neighbour, neighbour) to remove the reanchor pop (native fps)")
     # model paths
     ap.add_argument("--model_path", default=f"{ROOT}/VideoPainter/ckpt/CogVideoX-5b-I2V")
     ap.add_argument("--branch", default=f"{ROOT}/VideoPainter/ckpt/VideoPainter/checkpoints/branch")
@@ -125,9 +129,27 @@ def main():
     ap.add_argument("--resume", action="store_true", help="reuse existing stage outputs")
     ap.add_argument("--stop_after", default=None,
                     choices=["extract", "mask", "generate", "composite", "encode"])
+
+    # Config file: load YAML and inject as argparse defaults (CLI flags still override).
+    cfg_path = ap.parse_known_args()[0].config
+    if cfg_path:
+        with open(cfg_path) as f:
+            cfg = yaml.safe_load(f) or {}
+        known = {a.dest for a in ap._actions}
+        unknown = set(cfg) - known
+        if unknown:
+            print(f"[pipeline] WARNING: ignoring unknown config keys: {sorted(unknown)}")
+        ap.set_defaults(**{k: v for k, v in cfg.items() if k in known and v is not None})
     args = ap.parse_args()
 
-    run = os.path.join(ROOT, "outputs", args.name)
+    # required (from config or CLI)
+    missing = [k for k in ("source", "target", "prompt", "name") if not getattr(args, k)]
+    if missing:
+        ap.error(f"missing required: {missing} (set in --config or on the CLI)")
+    assert args.video or args.frames_dir, "need 'video' or 'frames_dir' (config or CLI)"
+
+    out_root = args.out_root or ROOT                    # default: editAnything/outputs/<name>
+    run = os.path.join(out_root, "outputs", args.name)
     os.makedirs(run, exist_ok=True)
     d_frames = os.path.join(run, "frames_src")
     d_mask_src = os.path.join(run, "mask_src")
@@ -145,8 +167,11 @@ def main():
     out_size = (tuple(int(v) for v in args.out_size.lower().split("x"))
                 if args.out_size else native_size)
     # Multi-chunk only kicks in past the model's single-pass limit (CLIP=49).
-    starts = ([int(x) for x in args.segment_starts.split(",")]
-              if args.segment_starts else default_segments(n_frames))
+    if args.segment_starts:
+        ss = args.segment_starts                      # may be a list (config) or "0,48" (CLI)
+        starts = [int(x) for x in (ss if isinstance(ss, (list, tuple)) else str(ss).split(","))]
+    else:
+        starts = default_segments(n_frames)
     mode = "single-pass" if n_frames <= CLIP else f"multi-chunk ({len(starts)} segments)"
     print(f"[pipeline] {n_frames} frames, native={native_size}, out={out_size}, "
           f"mode={mode}, segments={starts}")
@@ -156,15 +181,21 @@ def main():
     # 2-4. anchors + edit-region masks
     if args.backend == "assets":
         provider = anchors.get_anchor_provider("assets", assets_dir=args.assets)
-    else:  # roma: warp the frame-0 reference to every viewpoint
+        target_mask_dir = getattr(provider, "target_mask_dir", None)
+    else:  # roma: RoMa-propagate frame-0 -> per-frame edit masks + per-segment anchors
         assert args.ref0, "backend=roma needs --ref0 (frame-0 reference image)"
         provider = anchors.get_anchor_provider(
             "roma", frames_dir=d_frames, ref0_path=args.ref0,
-            target_word=(args.target_word or args.target), ref0_mask_path=args.ref0_mask,
-            work_dir=os.path.join(run, "roma"), segment_starts=starts)
-    target_mask_dir = getattr(provider, "target_mask_dir", None)
+            target_word=(args.target_word or args.target), source_word=args.source,
+            ref0_mask_path=args.ref0_mask, work_dir=os.path.join(run, "roma"),
+            segment_starts=starts, dilate=args.dilate)
+        target_mask_dir = provider.target_mask_dir   # triggers RoMa: edit masks + anchors
 
-    if args.mask_mode == "target":
+    if args.backend == "roma":
+        # edit region = the RoMa-propagated frame-0 (target ∪ source) bbox region
+        # (big enough for the new object); the per-frame SAM3 stage isn't needed here.
+        d_mask = target_mask_dir
+    elif args.mask_mode == "target":
         assert target_mask_dir, "mask_mode=target but provider has no target masks"
         d_mask = target_mask_dir
     else:
@@ -189,13 +220,14 @@ def main():
     if args.stop_after == "generate":
         return
 
-    # 6. composite onto fixed plate (= original frames) — unless --no_composite.
-    # Composite kills segment-boundary background jumps (needed for multi-chunk);
-    # skipping keeps the model's natural object grounding but lets the background
-    # shift at boundaries. Single-pass: makes ~no difference.
-    if args.no_composite:
+    # 6. composite onto fixed plate (= original frames). Default OFF for RoMa anchors:
+    # the warped anchor's hand/region, pasted within the mask, ghosts against the
+    # original hand. gen frames already keep the original background (replace_gt),
+    # so composite is unneeded there and would only re-introduce the ghost.
+    skip_composite = args.no_composite or args.backend == "roma"
+    if skip_composite:
         src_dir = os.path.join(d_gen, "frames")
-        print("[pipeline] --no_composite: encoding straight from gen frames")
+        print(f"[pipeline] composite skipped (backend={args.backend}); using gen frames")
     else:
         composite_step.composite(d_frames, os.path.join(d_gen, "frames"), d_mask, d_comp,
                                total=n_frames)
@@ -203,13 +235,14 @@ def main():
     if args.stop_after == "composite":
         return
 
-    # 7. encode portrait (+ optional RIFE-interpolated 2x-fps version)
+    # 7. encode portrait. --interpolate = RIFE anchor de-spike (replace each segment-
+    # boundary anchor frame with RIFE(neighbour, neighbour); native fps unchanged).
     final = os.path.join(run, "final.mp4")
+    anchor_frames = [s + 1 for s in starts if s > 0]   # 1-indexed boundary frames
+    if args.interpolate and anchor_frames:
+        src_dir = encode_step.despike_anchors(src_dir, os.path.join(run, "despike_frames"),
+                                              anchor_frames)
     encode_step.encode(src_dir, final, out_size, fps=args.fps)
-    if args.interpolate:
-        base, ext = os.path.splitext(final)
-        encode_step.encode_interpolated(src_dir, f"{base}_interp{ext}", out_size,
-                                        fps=args.fps, work_dir=os.path.join(run, "rife_frames"))
     print(f"[pipeline] DONE -> {final}")
 
 

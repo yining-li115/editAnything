@@ -11,8 +11,12 @@ ckpt/
 # Gradio / runtime temp artifacts
 **/tmp_gradio/
 
-# Pipeline run outputs (frames, masks, videos — regenerated, not tracked)
+# Pipeline run outputs (now written to ../outputs, i.e. /root/project/outputs)
 outputs/
+
+# Local input media (kept out of git); README documents what's used
+input/*
+!input/README.txt
 
 # Local .env (secrets); keep .env.example tracked
 .env
