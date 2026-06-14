@@ -9,10 +9,11 @@ Backends:
             take its bbox + dilate, then warp per frame.  (any video)
   - assets: load a prepared per-frame mask folder.
 
-NOTE (kept verbatim from the old anchors.RomaAnchors for behaviour-parity): the
-frame-0 region is the BOUNDING BOX of (target ∪ source) + `dilate` padding. The
-irregular-hull / scale-relative-dilate improvement is a future change to THIS file
-(a knob for the tuning agent), deliberately not done in the decoupling refactor.
+NOTE: the frame-0 region is the IRREGULAR HULL of (target ∪ source) — union the two
+silhouettes, morphological-close to bridge them, then dilate by `dilate` for margin.
+RoMa warps this shape to every frame (it follows the object + perspective), which an
+isotropic per-frame cup-dilate can't do for elongated targets. (`dilate` is the knob;
+scale-relative dilate is a future refinement.)
 """
 import os
 import glob
@@ -53,7 +54,7 @@ class RomaEditMask:
         self._prepared = False
 
     def _build_region0(self):
-        """frame-0 edit region = bbox of (SAM3 target on ref0 ∪ SAM3 source on frame0) + pad."""
+        """frame-0 edit region = irregular hull of (SAM3 target on ref0 ∪ SAM3 source on frame0)."""
         import components.sam3_mask as sam3_mask
         frame0 = _frames(self.frames_dir)[0]
         ref0_rgb = cv2.cvtColor(cv2.imread(self.ref0_path), cv2.COLOR_BGR2RGB)
@@ -68,14 +69,15 @@ class RomaEditMask:
                                             work_dir=self.work_dir, tag="srcobj")
         target_mask0 = cv2.resize(target_mask0, (w0, h0), interpolation=cv2.INTER_NEAREST)
         source_mask0 = cv2.resize(source_mask0, (w0, h0), interpolation=cv2.INTER_NEAREST)
-        u = (target_mask0 > 127) | (source_mask0 > 127)
-        ys, xs = np.where(u)
-        pad = max(0, int(self.dilate))
-        x0, x1 = max(0, xs.min() - pad), min(w0 - 1, xs.max() + pad)
-        y0, y1 = max(0, ys.min() - pad), min(h0 - 1, ys.max() + pad)
-        region0 = np.zeros((h0, w0), np.uint8)
-        region0[y0:y1 + 1, x0:x1 + 1] = 255
-        return region0
+        # frame-0 edit region = IRREGULAR HULL of (target ∪ source), not a rigid bbox:
+        # union the two silhouettes, CLOSE to bridge them into one blob, then DILATE by
+        # `dilate` for margin. RoMa warps this shape per frame (it follows the object).
+        u = ((target_mask0 > 127) | (source_mask0 > 127)).astype(np.uint8)
+        pad = max(1, int(self.dilate))
+        k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * pad + 1, 2 * pad + 1))
+        u = cv2.morphologyEx(u, cv2.MORPH_CLOSE, k)   # bridge src/tar, fill concavities
+        u = cv2.dilate(u, k)                          # margin
+        return (u * 255).astype(np.uint8)
 
     def prepare(self):
         if self._prepared:

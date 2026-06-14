@@ -264,10 +264,11 @@ What's done vs. still open.
 - [x] End-to-end fixed-param pipeline driven by `config.yaml` (`pipeline.py`)
 - [x] Decoupled components + `contracts/` registry; VideoPainter & sam3 as git submodules
 - [x] **Source-object shadow removal** — ROSE clean-plate removal (`components/removal.py`, separate `rose` env) + composite the new object onto the clean plate, via `--removal rose` (Role-1 post-processing). Verified on 100 frames.
+- [x] **Irregular-hull edit region** — frame-0 (target∪source) close+dilate hull (not bbox), RoMa-warped per frame (`components/edit_mask.py`); ~0.56× the bbox area, hugs the object.
 
 **Open — quality**
 
-- [ ] **Irregular-hull edit region** — replace the current (target∪source) **bbox** with an alpha-based irregular hull (RoMa-warp → dilate) that hugs the object and covers the shadow.
+- [ ] **Scale-relative dilate** — make the edit-region `dilate` proportional to object size (currently fixed px), so it's resolution/scale-invariant.
 
 **Open — agentic system** (see Roadmap)
 
