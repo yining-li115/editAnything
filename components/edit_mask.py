@@ -41,7 +41,8 @@ class AssetsEditMask:
 class RomaEditMask:
     """Build frame-0 (target∪source) bbox+dilate region, RoMa-warp it per frame."""
     def __init__(self, frames_dir, ref0_path, target_word, work_dir, *,
-                 device="cuda", ref0_mask_path=None, source_word=None, dilate=12):
+                 device="cuda", ref0_mask_path=None, source_word=None, dilate=12,
+                 region_shape="hull"):
         self.frames_dir = frames_dir
         self.ref0_path = ref0_path
         self.target_word = target_word
@@ -50,6 +51,7 @@ class RomaEditMask:
         self.device = device
         self.ref0_mask_path = ref0_mask_path
         self.dilate = dilate
+        self.region_shape = region_shape   # hull | rect (rotated quad) | bbox
         self._mask_dir = os.path.join(work_dir, "masks")
         self._prepared = False
 
@@ -69,15 +71,23 @@ class RomaEditMask:
                                             work_dir=self.work_dir, tag="srcobj")
         target_mask0 = cv2.resize(target_mask0, (w0, h0), interpolation=cv2.INTER_NEAREST)
         source_mask0 = cv2.resize(source_mask0, (w0, h0), interpolation=cv2.INTER_NEAREST)
-        # frame-0 edit region = IRREGULAR HULL of (target ∪ source), not a rigid bbox:
-        # union the two silhouettes, CLOSE to bridge them into one blob, then DILATE by
-        # `dilate` for margin. RoMa warps this shape per frame (it follows the object).
+        # frame-0 edit region from (target ∪ source) + margin; RoMa warps it per frame.
         u = ((target_mask0 > 127) | (source_mask0 > 127)).astype(np.uint8)
         pad = max(1, int(self.dilate))
         k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * pad + 1, 2 * pad + 1))
-        u = cv2.morphologyEx(u, cv2.MORPH_CLOSE, k)   # bridge src/tar, fill concavities
-        u = cv2.dilate(u, k)                          # margin
-        return (u * 255).astype(np.uint8)
+        u = cv2.morphologyEx(u, cv2.MORPH_CLOSE, k)   # bridge src/tar into one blob
+        region0 = np.zeros((h0, w0), np.uint8)
+        if self.region_shape == "bbox":              # rigid axis-aligned rectangle
+            ys, xs = np.where(u)
+            region0[max(0, ys.min()-pad):ys.max()+pad+1, max(0, xs.min()-pad):xs.max()+pad+1] = 255
+        elif self.region_shape == "rect":            # rotated min-area rectangle (quad) + margin
+            pts = cv2.findNonZero(u)
+            (cx, cy), (rw, rh), ang = cv2.minAreaRect(pts)
+            boxpts = cv2.boxPoints(((cx, cy), (rw + 2*pad, rh + 2*pad), ang)).astype(np.int32)
+            cv2.fillConvexPoly(region0, boxpts, 255)
+        else:                                        # hull: dilated irregular silhouette
+            region0 = cv2.dilate(u, k) * 255
+        return region0.astype(np.uint8)
 
     def prepare(self):
         if self._prepared:
@@ -137,5 +147,6 @@ def get_edit_mask(backend, **kw):
     if backend == "roma":
         return RomaEditMask(kw["frames_dir"], kw["ref0_path"], kw["target_word"], kw["work_dir"],
                             device=kw.get("device", "cuda"), ref0_mask_path=kw.get("ref0_mask_path"),
-                            source_word=kw.get("source_word"), dilate=kw.get("dilate", 12))
+                            source_word=kw.get("source_word"), dilate=kw.get("dilate", 12),
+                            region_shape=kw.get("region_shape", "hull"))
     raise ValueError(f"unknown edit_mask backend: {backend!r}")

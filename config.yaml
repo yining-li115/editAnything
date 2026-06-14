@@ -24,7 +24,8 @@ ref0: input/replacement.png               # (roma) frame-0 reference: new object
 
 # ---------- generation ----------
 # segment_starts: [0, 48]                 # blank -> auto from frame count (every 48 + tail)
-dilate: 12                                # edit-region bbox padding (px)
+dilate: 12                                # edit-region margin (px)
+region_shape: rect                        # frame-0 edit region from src∪tar: rect (rotated quad) | hull (tight) | bbox
 steps: 50
 guidance: 6.0
 seed: 42

@@ -47,6 +47,7 @@ def main():
     ap.add_argument("--prompt"); ap.add_argument("--ref0"); ap.add_argument("--ref0_mask")
     ap.add_argument("--segment_starts", default=None)
     ap.add_argument("--dilate", type=int, default=12)
+    ap.add_argument("--region_shape", default="rect", choices=["bbox", "rect", "hull"])
     ap.add_argument("--steps", type=int, default=50)
     ap.add_argument("--guidance", type=float, default=6.0)
     ap.add_argument("--seed", type=int, default=42)
@@ -89,7 +90,7 @@ def main():
         em = edit_mask.get_edit_mask(args.backend, frames_dir=frames, ref0_path=args.ref0,
                                      target_word=(args.target_word or args.target), source_word=args.source,
                                      ref0_mask_path=args.ref0_mask, work_dir=roma_dir, dilate=args.dilate,
-                                     assets_dir=args.out_dir)
+                                     region_shape=args.region_shape, assets_dir=args.out_dir)
         print("[stage] edit masks ->", em.mask_dir)
 
     elif s == "anchor":

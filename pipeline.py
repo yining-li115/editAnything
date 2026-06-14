@@ -65,6 +65,9 @@ def main():
     # generation params (validated exp3 reanchor)
     ap.add_argument("--segment_starts", default=None, help="comma list; default auto from frame count")
     ap.add_argument("--dilate", type=int, default=12)
+    ap.add_argument("--region_shape", default="rect", choices=["bbox", "rect", "hull"],
+                    help="frame-0 edit region from target∪source: rect=rotated quad (default), "
+                         "hull=tight irregular silhouette, bbox=rigid rectangle")
     ap.add_argument("--steps", type=int, default=50)
     ap.add_argument("--guidance", type=float, default=6.0)
     ap.add_argument("--seed", type=int, default=42)
@@ -141,7 +144,8 @@ def main():
         em = edit_mask_mod.get_edit_mask(
             "roma", frames_dir=d_frames, ref0_path=args.ref0,
             target_word=(args.target_word or args.target), source_word=args.source,
-            ref0_mask_path=args.ref0_mask, work_dir=rp.roma, dilate=args.dilate)
+            ref0_mask_path=args.ref0_mask, work_dir=rp.roma, dilate=args.dilate,
+            region_shape=args.region_shape)
         an = anchor_mod.get_anchor(
             "roma", frames_dir=d_frames, ref0_path=args.ref0,
             work_dir=rp.roma, segment_starts=starts)
