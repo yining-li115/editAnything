@@ -19,11 +19,11 @@ pipeline does NOT use: **FLUX.1-Fill-dev (~24 GB)**, the SAM2 CUDA extension, an
 the Gradio app (so no `OPENAI_API_KEY`).
 
 ```bash
-# 0. clone (sam3 is a sibling clone, gitignored)
-git clone https://github.com/yining-li115/editAnything.git && cd editAnything
-git clone https://github.com/facebookresearch/sam3.git
+# 0. clone WITH submodules (VideoPainter + sam3 are pinned git submodules, gitignored ckpt)
+git clone --recurse-submodules https://github.com/yining-li115/editAnything.git && cd editAnything
+#  (already cloned without --recurse-submodules? run:  git submodule update --init)
 
-# 1. env + the diffusers fork we actually use
+# 1. env + the diffusers fork we actually use (VideoPainter/ is the submodule checkout)
 conda create -n videopainter python=3.10 -y && conda activate videopainter
 cd VideoPainter
 pip install -r requirements.txt
@@ -32,20 +32,18 @@ conda install -c conda-forge ffmpeg -y
 cd ..
 #  Do NOT run `cd app && pip install -e .` — that builds the SAM2 ext we don't use.
 
-# 2. SAM3 into the SAME env without disturbing torch 2.4
+# 2. SAM3 (the sam3/ submodule) into the SAME env without disturbing torch 2.4
 cd sam3
 pip install -e . --no-deps --config-settings editable_mode=compat   # compat REQUIRED (else sam3.__file__ is None)
 pip install timm ftfy==6.1.1 regex iopath typing_extensions "setuptools<81" pycocotools
 cd ..
 python -c "import sam3; print(sam3.__file__)"   # must print a real path, not None
 
-# 3. HuggingFace + checkpoints — NO FLUX
+# 3. HuggingFace + checkpoints into the top-level ckpt/ (gitignored) — NO FLUX
 pip install "huggingface_hub==0.24.1"   # keep <1.0 (transformers 4.42.2); use the old huggingface-cli
 huggingface-cli login                    # first request access at https://huggingface.co/facebook/sam3
-cd VideoPainter
-huggingface-cli download TencentARC/VideoPainter --local-dir ckpt          # branch + VideoPainterID
+huggingface-cli download TencentARC/VideoPainter --local-dir ckpt          # branch + VideoPainterID -> ckpt/
 huggingface-cli download THUDM/CogVideoX-5b-I2V  --local-dir ckpt/CogVideoX-5b-I2V
-cd ..
 #  We do NOT download black-forest-labs/FLUX.1-Fill-dev (flux_inp) — not used (~24 GB saved).
 #  SAM3 weights auto-download on first build (gated facebook/sam3).
 
@@ -73,10 +71,11 @@ export RIFE_BIN="$(cd .. && pwd)/tools/rife-ncnn-vulkan-20221029-ubuntu/rife-ncn
 #   stale absolute path (/root/project/tools/...) and won't match a fresh checkout.
 ```
 
-Checkpoint layout we rely on:
+Checkpoint layout we rely on (top-level `ckpt/`, gitignored; paths come from
+`contracts/layout.py`'s model registry):
 
 ```
-VideoPainter/ckpt/
+ckpt/
 ├── VideoPainter/checkpoints/branch     # CogvideoXBranchModel
 ├── VideoPainterID/checkpoints          # VideoPainterID LoRA
 └── CogVideoX-5b-I2V                     # base I2V DiT
@@ -84,39 +83,44 @@ VideoPainter/ckpt/
 
 Gotchas (learned the hard way):
 
-- **diffusers `outputs.py` missing** → `ModuleNotFoundError: diffusers.utils.outputs`.
-  Caused by VideoPainter/.gitignore's broad `output*`/`test*` rules (already fixed
-  here to `/output*` / `/test*`). On a fresh checkout that still lacks the file,
-  restore `src/diffusers/utils/outputs.py` from diffusers v0.31.0.
 - Keep `huggingface_hub < 1.0` and `ftfy==6.1.1`, `setuptools<81` (sam3 uses
   `pkg_resources`). If `decord` import fails (non-x86_64): `pip install eva-decord`.
 - Env = `/venv/videopainter` on this server (`/venv/videopainter/bin/python`).
 
 Full original setup notes (incl. the parts we dropped) live in `../SERVER_SETUP.md`.
 
-## What we actually use from `VideoPainter/`
+## What we actually use from the `VideoPainter/` submodule
 
-Only two things — treat the rest of that vendored repo as untouched upstream:
+`VideoPainter/` is a pinned submodule of upstream `TencentARC/VideoPainter` (no
+fork, no patches). We only use:
 
 - `VideoPainter/diffusers/` — the custom fork providing
   `CogVideoXI2VDualInpaintAnyLPipeline`, `CogvideoXBranchModel`, and the id_pool
   `CogVideoXTransformer3DModel`.
-- `VideoPainter/ckpt/{CogVideoX-5b-I2V, VideoPainter/checkpoints/branch, VideoPainterID/checkpoints}`.
+- the checkpoints in top-level `ckpt/{CogVideoX-5b-I2V, VideoPainter/checkpoints/branch, VideoPainterID/checkpoints}`.
 
-Not used: `app/` (Gradio), `app/sam2*`, `utils.py`'s FLUX path, `ckpt/flux_inp`,
+Not used: `app/` (Gradio), `app/sam2*`, `utils.py`'s FLUX path, `flux_inp`,
 `train/`, `evaluate/`, `infer/`, `data_utils/`.
 
-## Modules (in `src/`)
+## Code layout
 
-| File             | Stage                                                        |
-| ---------------- | ------------------------------------------------------------ |
-| `sam3_track.py`  | SAM3 text prompt → per-frame source mask                     |
-| `gemini_edit.py` | Gemini API → in-place frame edit (the new-object reference)  |
-| `anchors.py`     | per-segment anchors + target masks (pluggable; see gap below) |
-| `generate.py`    | VideoPainter multi-chunk reanchor generation (**models loaded once**) |
-| `composite.py`   | feather the object onto a fixed plate (kills chunk-boundary jumps) |
-| `encode.py`      | frames → portrait mp4 (+ optional interpolation)             |
-| `pipeline.py`    | end-to-end orchestrator + CLI                                |
+Capability logic, MCP layer, and agents are separated so each stage is an
+isolated, independently-wrappable unit (dependency direction:
+`contracts ← components ← (mcp) ← (agents)`).
+
+| Path                       | Role                                                          |
+| -------------------------- | ------------------------------------------------------------ |
+| `components/extract.py`    | video → frames + frame-set queries                           |
+| `components/sam3_mask.py`  | SAM3 text prompt → per-frame (or single-image) mask          |
+| `components/gemini_edit.py`| Gemini API → in-place frame edit (the new-object reference)  |
+| `components/roma_warp.py`  | low-level RoMa match + warp primitives (shared)              |
+| `components/edit_mask.py`  | per-frame edit region — **generic, cross-candidate** (roma/assets) |
+| `components/anchor.py`     | per-segment clean anchors — **VideoPainter-specific** (roma/assets) |
+| `components/videopainter.py`| VideoPainter multi-chunk reanchor generation (**models loaded once**) |
+| `components/composite.py`  | feather the object onto a fixed plate (kills chunk-boundary jumps) |
+| `components/encode.py`     | frames → portrait mp4 (+ optional RIFE de-spike)             |
+| `contracts/layout.py`      | run-dir layout + config-driven model registry (ckpt paths)  |
+| `pipeline.py`              | end-to-end local runner (wires the components)              |
 
 Outputs land in `outputs/<name>/`.
 
@@ -127,7 +131,7 @@ All tunable parameters live in **`config.yaml`** — edit it, then:
 ```bash
 conda activate videopainter   # /venv/videopainter
 cd editAnything
-HF_HOME=/workspace/.hf_home python src/pipeline.py --config config.yaml
+HF_HOME=/workspace/.hf_home python pipeline.py --config config.yaml
 ```
 
 `config.yaml` holds the source/target objects, prompt, backend, paths, segment/
@@ -151,22 +155,23 @@ with segment starts auto-derived from the frame count.
 
 ```bash
 # A) describe the new object
-python src/gemini_edit.py --image frame_00001.png --out ref.png --source cup --target "a ripe yellow banana"
+python -m components.gemini_edit --image frame_00001.png --out ref.png --source cup --target "a ripe yellow banana"
 # B) supply an image of the exact object you want
-python src/gemini_edit.py --image frame_00001.png --out ref.png --source cup --ref_image my_banana.png
+python -m components.gemini_edit --image frame_00001.png --out ref.png --source cup --ref_image my_banana.png
 ```
 
 Needs `pip install google-genai` and `GEMINI_API_KEY` (see `.env.example`).
 
 ## Any-video path (RoMa backend)
 
-`--backend roma` builds, from scratch, both the per-frame edit masks and the
-per-segment anchors from one RoMa pass (`roma_propagate.py`):
+`--backend roma` builds, from scratch, both the per-frame edit masks
+(`components/edit_mask.py`) and the per-segment anchors (`components/anchor.py`),
+sharing RoMa warp primitives (`components/roma_warp.py`):
 
 - SAM3 segments the new object on `ref0` and the old object on frame 0 →
   frame-0 edit region; RoMa dense-warps it to every frame (follows motion).
 - the whole `ref0` is warped to each segment start → the per-segment anchor.
-  Needs only `--ref0` (a frame-0 edit from `gemini_edit.py`). `--backend assets`
+  Needs only `--ref0` (a frame-0 edit from `gemini_edit`). `--backend assets`
   instead loads prepared anchors + masks.
 
 ## Smoothing (RIFE anchor de-spike)
@@ -240,12 +245,13 @@ What's done vs. still open.
 
 **Done**
 
-- [x] SAM3 text-prompt source mask (`sam3_track.py`)
-- [x] Gemini frame-0 edit / reference (`gemini_edit.py`)
-- [x] RoMa anchor + edit-mask propagation, any-length video (`roma_propagate.py`, `anchors.py`)
-- [x] VideoPainter inpainting-only generation, multi-chunk reanchor, models loaded once (`generate.py`)
-- [x] Composite + portrait encode + RIFE anchor de-spike (`composite.py`, `encode.py`)
+- [x] SAM3 text-prompt source mask (`components/sam3_mask.py`)
+- [x] Gemini frame-0 edit / reference (`components/gemini_edit.py`)
+- [x] RoMa edit-mask + anchor propagation, any-length video (`components/roma_warp.py`, `edit_mask.py`, `anchor.py`)
+- [x] VideoPainter inpainting-only generation, multi-chunk reanchor, models loaded once (`components/videopainter.py`)
+- [x] Composite + portrait encode + RIFE anchor de-spike (`components/composite.py`, `encode.py`)
 - [x] End-to-end fixed-param pipeline driven by `config.yaml` (`pipeline.py`)
+- [x] Decoupled components + `contracts/` registry; VideoPainter & sam3 as git submodules
 
 **Open — quality**
 
