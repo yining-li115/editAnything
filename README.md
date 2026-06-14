@@ -13,7 +13,7 @@ Gemini (unlike the original `submodules/VideoPainter/app/app.py` Gradio demo). F
 
 ## Environment setup (only what we need)
 
-One conda env (`videopainter`, Python 3.10, torch 2.4 / cu121) runs everything we
+One conda env (`editanything`, Python 3.10, torch 2.4 / cu121) runs everything we
 use. We deliberately skip the heavy parts of a full VideoPainter install that our
 pipeline does NOT use: **FLUX.1-Fill-dev (~24 GB)**, the SAM2 CUDA extension, and
 the Gradio app (so no `OPENAI_API_KEY`).
@@ -24,7 +24,7 @@ git clone --recurse-submodules https://github.com/yining-li115/editAnything.git 
 #  (already cloned without --recurse-submodules? run:  git submodule update --init)
 
 # 1. env + the diffusers fork we actually use (submodules/VideoPainter/ is the checkout)
-conda create -n videopainter python=3.10 -y && conda activate videopainter
+conda create -n editanything python=3.10 -y && conda activate editanything
 cd submodules/VideoPainter
 pip install -r requirements.txt
 pip install -e ./diffusers           # CogVideoX branch / id_pool pipeline lives here
@@ -85,7 +85,8 @@ Gotchas (learned the hard way):
 
 - Keep `huggingface_hub < 1.0` and `ftfy==6.1.1`, `setuptools<81` (sam3 uses
   `pkg_resources`). If `decord` import fails (non-x86_64): `pip install eva-decord`.
-- Env = `/venv/videopainter` on this server (`/venv/videopainter/bin/python`).
+- Activate the `editanything` conda env before running (it holds the torch 2.4 /
+  sam3 / diffusers-fork installs).
 
 Full original setup notes (incl. the parts we dropped) live in `../SERVER_SETUP.md`.
 
@@ -129,7 +130,7 @@ Outputs land in `outputs/<name>/`.
 All tunable parameters live in **`config.yaml`** — edit it, then:
 
 ```bash
-conda activate videopainter   # /venv/videopainter
+conda activate editanything
 cd editAnything
 HF_HOME=/workspace/.hf_home python pipeline.py --config config.yaml
 ```
