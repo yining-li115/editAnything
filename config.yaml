@@ -1,11 +1,11 @@
 # editAnything pipeline config.
-#   Run:  cd editAnything && python src/pipeline.py --config config.yaml
+#   Run:  cd editAnything && python pipeline.py --config config.yaml
 # Any CLI flag overrides the value here. Comment a line out to fall back to the
 # built-in default. Paths may be absolute or relative to where you run the command.
 
 # ---------- input ----------  (see input/README.txt)
-# video: input/cup2.mp4                  # full 300f (7 chunks)
-frames_dir: input/frames_2chunk           # 97 frames -> 2 chunks (this run)
+video: input/cup2_low.mp4                  # source clip (300 frames)
+# frames_dir: outputs/_shared100/frames_src  # or point at pre-extracted frames (quick tests)
 
 # ---------- what to replace ----------
 source: cup                               # OLD object to remove (SAM3 noun)
@@ -13,7 +13,7 @@ target: a ripe yellow banana              # NEW object (short description)
 target_word: banana                       # NEW object noun for SAM3 on ref0 (blank -> uses `target`)
 prompt: "a ripe yellow banana resting on a glossy dark round table, a hand with a ring on the table, smooth reflective tabletop, soft natural light, pale blue-grey wall"
 
-name: cup2_2chunk          # outputs -> /root/project/outputs/cup2_2chunk/
+name: cup2_rose            # outputs -> editAnything/outputs/cup2_rose/
 
 # ---------- anchors + edit region ----------
 backend: roma                             # roma (general) | assets (use prepared anchors+masks)
@@ -29,13 +29,15 @@ steps: 50
 guidance: 6.0
 seed: 42
 
-# ---------- output ----------
+# ---------- post-processing / output ----------
+removal: rose                             # rose -> ROSE clean-plate removal of source object + shadow,
+                                          #   then composite new object onto it; none -> off
 out_size: 480x832                         # WxH; blank -> native frame size
 fps: 25
 interpolate: true                         # RIFE anchor de-spike (smooth segment boundaries)
-no_composite: false                       # roma backend skips composite automatically regardless
+no_composite: false                       # (only matters when removal=none; roma skips composite anyway)
 
-# ---------- models (blank -> repo defaults under VideoPainter/ckpt) ----------
+# ---------- models (blank -> repo defaults under ckpt/) ----------
 # model_path:
 # branch:
 # id_lora:

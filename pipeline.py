@@ -13,6 +13,7 @@ Stages (each cached; --resume reuses existing outputs):
   7. encode      -> final.mp4 (+ RIFE anchor de-spike)         [components.encode]
 """
 import os
+import glob
 import argparse
 import yaml
 
@@ -67,9 +68,12 @@ def main():
     # flow control
     ap.add_argument("--no_composite", action="store_true",
                     help="skip seamless composite; encode straight from gen frames")
+    ap.add_argument("--removal", default="none", choices=["none", "rose"],
+                    help="rose = ROSE clean-plate removal of the source object + its shadow, "
+                         "then composite the new object onto that clean plate (post-processing)")
     ap.add_argument("--resume", action="store_true", help="reuse existing stage outputs")
     ap.add_argument("--stop_after", default=None,
-                    choices=["extract", "mask", "generate", "composite", "encode"])
+                    choices=["extract", "mask", "generate", "removal", "composite", "encode"])
 
     # Config file: load YAML and inject as argparse defaults (CLI flags still override).
     cfg_path = ap.parse_known_args()[0].config
@@ -153,9 +157,30 @@ def main():
     if args.stop_after == "generate":
         return
 
-    # 6. composite onto fixed plate (= original frames). Default OFF for RoMa anchors.
-    skip_composite = args.no_composite or args.backend == "roma"
-    if skip_composite:
+    # 5.5 ROSE removal -> clean plate (source object + its shadow removed). Runs in
+    # its own `rose` conda env as a subprocess; needs a per-frame SOURCE mask (cup
+    # silhouette), which the roma backend doesn't otherwise compute, so derive it here.
+    clean_plate = None
+    if args.removal == "rose":
+        from components import removal
+        if not (args.resume and extract.has_frames(rp.mask_src)):
+            from components import sam3_mask
+            sam3_mask.track(sam3_mask.build_predictor(), d_frames, args.source, rp.mask_src)
+        if not (args.resume and extract.has_frames(rp.clean_frames)):
+            removal.remove(d_frames, rp.mask_src, rp.removal)
+        clean_plate = rp.clean_frames
+    if args.stop_after == "removal":
+        return
+
+    # 6. composite. Default OFF for RoMa anchors (replace_gt already keeps the
+    # background) — UNLESS removal=rose, where we composite the new object onto the
+    # ROSE clean plate so the source object's shadow leaves the final output.
+    if args.removal == "rose":
+        total = len(glob.glob(f"{clean_plate}/frame_*.png"))   # clean plate is 16n+1 (<= n)
+        composite_step.composite(clean_plate, rp.gen_frames, d_mask, rp.composite, total=total)
+        src_dir = rp.composite
+        print(f"[pipeline] composited onto ROSE clean plate ({total} frames)")
+    elif args.no_composite or args.backend == "roma":
         src_dir = rp.gen_frames
         print(f"[pipeline] composite skipped (backend={args.backend}); using gen frames")
     else:

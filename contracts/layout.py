@@ -29,6 +29,7 @@ class RunPaths:
         self.mask       = os.path.join(self.root, "mask")          # unioned edit-region (assets/union)
         self.roma       = os.path.join(self.root, "roma")          # roma/{masks,anchors}
         self.gen        = os.path.join(self.root, "gen")           # gen/frames
+        self.removal    = os.path.join(self.root, "removal")       # removal/frames (ROSE clean plate)
         self.composite  = os.path.join(self.root, "composite")
         self.despike    = os.path.join(self.root, "despike_frames")
         self.final      = os.path.join(self.root, "final.mp4")
@@ -36,3 +37,7 @@ class RunPaths:
     @property
     def gen_frames(self):
         return os.path.join(self.gen, "frames")
+
+    @property
+    def clean_frames(self):
+        return os.path.join(self.removal, "frames")
