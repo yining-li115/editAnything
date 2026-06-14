@@ -56,9 +56,21 @@ cp .env.example .env && $EDITOR .env     # set GEMINI_API_KEY
 # 5. RoMa anchor/mask propagation (--backend roma) — keep torch 2.4
 pip install romatch --no-deps && pip install loguru einops   # do NOT let it pull torch>=2.5
 
-# 6. RIFE smoothing (--interpolate) — prebuilt binary (Vulkan), incl. models
-#    download from https://github.com/nihui/rife-ncnn-vulkan/releases, then:
-export RIFE_BIN=/path/to/rife-ncnn-vulkan-*/rife-ncnn-vulkan   # default points under ../tools/
+# 6. RIFE smoothing (--interpolate) — prebuilt rife-ncnn-vulkan binary (Vulkan/GPU,
+#    ships its own models). Needs a Vulkan loader (libvulkan.so.1 — provided by the
+#    NVIDIA driver; check with `ldconfig -p | grep libvulkan`). Download + extract
+#    under the repo parent's tools/ (commands run from editAnything/):
+mkdir -p ../tools && cd ../tools
+wget https://github.com/nihui/rife-ncnn-vulkan/releases/download/20221029/rife-ncnn-vulkan-20221029-ubuntu.zip
+unzip -q rife-ncnn-vulkan-20221029-ubuntu.zip
+chmod +x rife-ncnn-vulkan-20221029-ubuntu/rife-ncnn-vulkan
+cd ../editAnything
+export RIFE_BIN="$(cd .. && pwd)/tools/rife-ncnn-vulkan-20221029-ubuntu/rife-ncnn-vulkan"
+#   sanity-check it runs (rife-v4.6 model ships inside the zip, next to the binary;
+#   matches encode.py's RIFE_MODEL default):
+#     "$RIFE_BIN" -0 a.png -1 b.png -o mid.png -m "$(dirname "$RIFE_BIN")/rife-v4.6"
+#   NOTE: set RIFE_BIN explicitly as above — encode.py's built-in fallback path is a
+#   stale absolute path (/root/project/tools/...) and won't match a fresh checkout.
 ```
 
 Checkpoint layout we rely on:
