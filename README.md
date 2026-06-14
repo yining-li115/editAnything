@@ -9,7 +9,7 @@ the whole clip, decoupling three independent components:
   consistent across the video (CogVideoX-5B-I2V + branch + VideoPainterID LoRA).
 
 These are **separate stages that exchange files**; VideoPainter never calls SAM3 or
-Gemini (unlike the original `VideoPainter/app/app.py` Gradio demo). FLUX is not used.
+Gemini (unlike the original `submodules/VideoPainter/app/app.py` Gradio demo). FLUX is not used.
 
 ## Environment setup (only what we need)
 
@@ -23,20 +23,20 @@ the Gradio app (so no `OPENAI_API_KEY`).
 git clone --recurse-submodules https://github.com/yining-li115/editAnything.git && cd editAnything
 #  (already cloned without --recurse-submodules? run:  git submodule update --init)
 
-# 1. env + the diffusers fork we actually use (VideoPainter/ is the submodule checkout)
+# 1. env + the diffusers fork we actually use (submodules/VideoPainter/ is the checkout)
 conda create -n videopainter python=3.10 -y && conda activate videopainter
-cd VideoPainter
+cd submodules/VideoPainter
 pip install -r requirements.txt
 pip install -e ./diffusers           # CogVideoX branch / id_pool pipeline lives here
 conda install -c conda-forge ffmpeg -y
-cd ..
+cd ../..
 #  Do NOT run `cd app && pip install -e .` — that builds the SAM2 ext we don't use.
 
-# 2. SAM3 (the sam3/ submodule) into the SAME env without disturbing torch 2.4
-cd sam3
+# 2. SAM3 (the submodules/sam3 submodule) into the SAME env without disturbing torch 2.4
+cd submodules/sam3
 pip install -e . --no-deps --config-settings editable_mode=compat   # compat REQUIRED (else sam3.__file__ is None)
 pip install timm ftfy==6.1.1 regex iopath typing_extensions "setuptools<81" pycocotools
-cd ..
+cd ../..
 python -c "import sam3; print(sam3.__file__)"   # must print a real path, not None
 
 # 3. HuggingFace + checkpoints into the top-level ckpt/ (gitignored) — NO FLUX
@@ -89,12 +89,12 @@ Gotchas (learned the hard way):
 
 Full original setup notes (incl. the parts we dropped) live in `../SERVER_SETUP.md`.
 
-## What we actually use from the `VideoPainter/` submodule
+## What we actually use from the `submodules/VideoPainter` submodule
 
-`VideoPainter/` is a pinned submodule of upstream `TencentARC/VideoPainter` (no
-fork, no patches). We only use:
+`submodules/VideoPainter` is a pinned submodule of upstream `TencentARC/VideoPainter`
+(no fork, no patches). We only use:
 
-- `VideoPainter/diffusers/` — the custom fork providing
+- `submodules/VideoPainter/diffusers/` — the custom fork providing
   `CogVideoXI2VDualInpaintAnyLPipeline`, `CogvideoXBranchModel`, and the id_pool
   `CogVideoXTransformer3DModel`.
 - the checkpoints in top-level `ckpt/{CogVideoX-5b-I2V, VideoPainter/checkpoints/branch, VideoPainterID/checkpoints}`.

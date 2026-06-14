@@ -186,9 +186,9 @@ if __name__ == "__main__":
                     help="comma list, e.g. 0,48,96 or a single start for one chunk "
                          "(default: auto from frame count via default_segments)")
     ap.add_argument("--total", type=int, default=CLIP)
-    ap.add_argument("--model_path", default="VideoPainter/ckpt/CogVideoX-5b-I2V")
-    ap.add_argument("--branch", default="VideoPainter/ckpt/VideoPainter/checkpoints/branch")
-    ap.add_argument("--id_lora", default="VideoPainter/ckpt/VideoPainterID/checkpoints")
+    ap.add_argument("--model_path", default="ckpt/CogVideoX-5b-I2V")
+    ap.add_argument("--branch", default="ckpt/VideoPainter/checkpoints/branch")
+    ap.add_argument("--id_lora", default="ckpt/VideoPainterID/checkpoints")
     ap.add_argument("--dilate", type=int, default=12)
     ap.add_argument("--steps", type=int, default=50)
     ap.add_argument("--guidance", type=float, default=6.0)
