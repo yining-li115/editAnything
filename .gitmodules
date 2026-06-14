@@ -4,6 +4,6 @@
 [submodule "VideoPainter"]
 	path = submodules/VideoPainter
 	url = https://github.com/TencentARC/VideoPainter.git
-[submodule "submodules/ROSE"]
+[submodule "ROSE"]
 	path = submodules/ROSE
 	url = https://github.com/Kunbyte-AI/ROSE.git
