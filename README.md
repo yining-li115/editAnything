@@ -71,6 +71,35 @@ export RIFE_BIN="$(cd .. && pwd)/tools/rife-ncnn-vulkan-20221029-ubuntu/rife-ncn
 #   stale absolute path (/root/project/tools/...) and won't match a fresh checkout.
 ```
 
+### ROSE removal env (optional — only for `--removal rose`)
+
+ROSE removes the source object **and its shadow/reflection** → a clean plate. It needs
+its OWN env (Python 3.12, torch 2.6 / cu124, stock diffusers) — incompatible with
+`editanything` (torch 2.4 + VideoPainter's diffusers fork) — so it runs as a subprocess.
+Skip this whole section unless you use `--removal rose`.
+
+```bash
+# 1. separate env + ROSE deps (torch 2.6 / cu124)
+conda create -n rose python=3.12 -y
+conda run -n rose pip install torch==2.6.0 torchvision==0.21.0 --index-url https://download.pytorch.org/whl/cu124
+conda run -n rose pip install -r submodules/ROSE/requirements.txt
+conda run -n rose pip install "transformers==4.46.2"   # pin <5 (diffusers 0.31 needs FLAX_WEIGHTS_NAME)
+
+# 2. weights into top-level ckpt/ROSE/ (gitignored): ROSE transformer + Wan2.1-Fun base
+huggingface-cli download Kunbyte/ROSE --local-dir ckpt/ROSE/weights
+mkdir -p ckpt/ROSE/weights/transformer
+mv ckpt/ROSE/weights/config.json ckpt/ROSE/weights/diffusion_pytorch_model.safetensors ckpt/ROSE/weights/transformer/
+huggingface-cli download alibaba-pai/Wan2.1-Fun-1.3B-InP --local-dir ckpt/ROSE/models/Wan2.1-Fun-1.3B-InP
+
+# 3. symlink weights into the paths ROSE's inference.py expects (run from repo root)
+ln -sfn "$(pwd)/ckpt/ROSE/models"  submodules/ROSE/models
+ln -sfn "$(pwd)/ckpt/ROSE/weights" submodules/ROSE/weights
+```
+
+`components/removal.py` invokes this env via `ROSE_PYTHON` (default `/venv/rose/bin/python`;
+set it to your env, e.g. `export ROSE_PYTHON="$(conda info --base)/envs/rose/bin/python"`).
+ROSE resizes to 480×720 and needs clip length `16n+1`.
+
 ### Runtime env vars (set before running)
 
 ```bash
@@ -202,15 +231,15 @@ isolated, independently-wrappable unit (dependency direction:
 
 ## Known limitations
 
-- **Source-object shadow can remain.** The old object's cast shadow lives outside
-  the SAM3 mask, so it is neither in the edit region nor removed. The original
-  pipeline killed it by compositing onto a **ROSE cup-removed plate** (a separate
-  removal stage we don't have). Fixes: (a) grow the edit region (irregular hull +
-  dilate) to cover the shadow so generation repaints it, or (b) add a ROSE removal
-  stage. See Roadmap.
-- Edit region is currently a **bbox** of (target∪source); an **irregular hull**
-  (banana_no_bg-style alpha → RoMa-warp → dilate) hugs the object better and
-  covers the shadow — to be switched in.
+- **`dilate` is fixed pixels, not scale-relative.** The edit-region margin is a fixed
+  px value, so it isn't resolution/object-size invariant. Making it proportional to
+  object size is the next refinement (and a future tuning-agent knob).
+- **ROSE runs the whole clip in one pass.** It processes `16n+1` frames in a single
+  diffusion call, so very long clips are VRAM-heavy; chunking ROSE for long videos is
+  open. Also, `--removal rose` covers the shadow only where it falls *outside* the edit
+  mask (inside the mask comes from the generated frame).
+- **Source shadow** is handled (ROSE clean-plate via `--removal rose`); the **edit
+  region** is now a rotated-rect / hull of (target∪source), not a rigid bbox.
 
 ## Roadmap (agentic)
 
