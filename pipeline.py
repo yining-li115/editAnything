@@ -29,12 +29,26 @@ CLIP = videopainter.CLIP
 _VP = layout.MODELS["videopainter"]
 
 
+def _limit_frames(src_dir, n, dst_dir):
+    """Return a dir of symlinks to the first n frame_*.png of src_dir (for --max_frames
+    when frames are pre-extracted; the --video path limits at ffmpeg decode instead)."""
+    os.makedirs(dst_dir, exist_ok=True)
+    for p in sorted(glob.glob(f"{src_dir}/frame_*.png"))[:n]:
+        link = os.path.join(dst_dir, os.path.basename(p))
+        if not os.path.lexists(link):
+            os.symlink(os.path.abspath(p), link)
+    print(f"[pipeline] limited to first {n} frames -> {dst_dir}")
+    return dst_dir
+
+
 def main():
     ap = argparse.ArgumentParser(description="End-to-end video object replacement")
     ap.add_argument("--config", help="YAML config file; its values become defaults, CLI flags override")
     # inputs
     ap.add_argument("--video", help="input video (or use --frames_dir)")
     ap.add_argument("--frames_dir", help="pre-extracted frames frame_00001.png... (skip extraction)")
+    ap.add_argument("--max_frames", type=int, default=None,
+                    help="process only the first N frames (quick tests, any length)")
     ap.add_argument("--source", help="OLD object to remove — SAM3 noun (e.g. 'cup')")
     ap.add_argument("--target", help="NEW object description (e.g. 'a ripe yellow banana')")
     ap.add_argument("--prompt", help="global generation prompt for the edited video")
@@ -99,8 +113,10 @@ def main():
     # 1. frames
     if args.frames_dir:
         d_frames = args.frames_dir
+        if args.max_frames:
+            d_frames = _limit_frames(d_frames, args.max_frames, os.path.join(rp.root, "frames_used"))
     else:
-        extract.extract_frames(args.video, d_frames, resume=args.resume)
+        extract.extract_frames(args.video, d_frames, resume=args.resume, max_frames=args.max_frames)
     n_frames, native_size = extract.video_meta(d_frames)
     out_size = (tuple(int(v) for v in args.out_size.lower().split("x"))
                 if args.out_size else native_size)
