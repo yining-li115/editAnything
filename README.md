@@ -71,6 +71,20 @@ export RIFE_BIN="$(cd .. && pwd)/tools/rife-ncnn-vulkan-20221029-ubuntu/rife-ncn
 #   stale absolute path (/root/project/tools/...) and won't match a fresh checkout.
 ```
 
+### Runtime env vars (set before running)
+
+```bash
+export HF_HOME=/workspace/.hf_home                      # HF cache (gated SAM3 weights)
+export HF_TOKEN=$(cat /root/.cache/huggingface/token)   # HF auth for gated facebook/sam3
+export RIFE_BIN=/root/tools/rife-ncnn-vulkan-20221029-ubuntu/rife-ncnn-vulkan  # for --interpolate
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True # reduce CUDA fragmentation / OOM
+```
+
+- **`HF_HOME`** — HuggingFace cache root; SAM3 (gated `facebook/sam3`) loads its weights from here.
+- **`HF_TOKEN`** — auth token for the gated SAM3 download. Needed because setting `HF_HOME` stops the hub from finding the default `~/.cache/huggingface/token`.
+- **`RIFE_BIN`** — path to the `rife-ncnn-vulkan` binary, used by `--interpolate` (RIFE de-spike); `encode.py`'s built-in fallback path is stale.
+- **`PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True`** — lowers CUDA memory fragmentation; helps avoid OOM when VRAM is tight.
+
 Checkpoint layout we rely on (top-level `ckpt/`, gitignored; paths come from
 `contracts/layout.py`'s model registry):
 
@@ -89,6 +103,69 @@ Gotchas (learned the hard way):
   sam3 / diffusers-fork installs).
 
 Full original setup notes (incl. the parts we dropped) live in `../SERVER_SETUP.md`.
+
+## Data preprocessing (prepare the inputs)
+
+The pipeline consumes: a **video** (or pre-extracted frames) + a frame-0 reference
+**`ref0`** showing the NEW object in place — the only generative input besides the
+video. Make `ref0` with the Gemini edit stage:
+
+```bash
+# A) describe the new object
+python -m components.gemini_edit --image frame_00001.png --out ref0.png --source cup --target "a ripe yellow banana"
+# B) supply an image of the exact object you want
+python -m components.gemini_edit --image frame_00001.png --out ref0.png --source cup --ref_image my_banana.png
+```
+
+Needs `pip install google-genai` + `GEMINI_API_KEY` (see `.env.example`). The edit
+must stay pixel-aligned with frame 0. (`--backend assets` skips this — uses prepared
+anchors + masks instead.)
+
+## Run
+
+**Entry point: [`pipeline.py`](pipeline.py)** — the end-to-end runner. Set the env
+vars above, then e.g.:
+
+```bash
+python pipeline.py --config config.yaml --max_frames 100 --name cup_100
+```
+
+- **`--config config.yaml`** — all task + pipeline params (source/target/prompt, `backend`,
+  `ref0`, `removal`, sampling, output…); see the file's comments. Any value is overridable on the CLI.
+- **`--max_frames 100`** — process only the first 100 frames (omit → the whole clip).
+- **`--name cup_100`** — run name; outputs land in `outputs/cup_100/`.
+- Other overrides: `--seed 7`, `--removal none`, `--segment_starts 0` (one chunk), `--backend assets`, …
+
+Outputs land in `outputs/<name>/`. Handy debug flags:
+
+- **Stop early:** `--stop_after extract|mask|generate|removal|composite|encode`
+- **Test one stage (toggle):** `python stage.py --config config.yaml --stage <extract|sam3|edit_mask|anchor|removal|generate|composite|encode>` — config-driven defaults, any input overridable (e.g. `--stage composite --plate_dir <clean> --object_dir <gen>`). Each component also has its own `python -m components.<x>` CLI.
+
+## How it works (brief)
+
+- **`backend: roma`** (any video): SAM3 masks the new object on `ref0` + the old object
+  on frame 0 → frame-0 edit region; `roma_warp` dense-warps it to every frame (edit masks)
+  and warps the whole `ref0` to each segment start (anchors). Only needs `ref0`.
+- **Length:** base model = 49 frames/pass; ≤49 → single pass, else multi-chunk reanchor,
+  segment starts auto-derived from the frame count.
+- **`--interpolate`** (RIFE de-spike): swaps each segment-boundary anchor frame for
+  `RIFE(n-1, n+1)` to kill the one-frame reanchor "pop" (native fps; needs `RIFE_BIN`).
+
+## Key params (`config.yaml`)
+
+| param | default | note |
+| --- | --- | --- |
+| `backend` | `roma` | `roma` (any video) / `assets` (prepared) |
+| `dilate` | 12 | edit-region padding (px) — **not yet scale-relative; applied at both mask + generate** |
+| `steps` / `guidance` | 50 / 6.0 | DPM-trailing sampling |
+| `seed` | 42 | reproducibility |
+| `segment_starts` | auto | `0,48,96,…` once past 49 frames |
+| `out_size` / `fps` | 480x832 / 25 | final portrait |
+| `interpolate` | true | RIFE boundary de-spike |
+
+Internals: 720×480 work res, `id_pool_resample_learnable=True`, sequential CPU offload +
+VAE tiling; ~11 min/segment, ~22 GB peak. RoMa backend skips composite (warped-anchor
+composite would ghost the hand).
 
 ## What we actually use from the `submodules/VideoPainter` submodule
 
@@ -122,68 +199,6 @@ isolated, independently-wrappable unit (dependency direction:
 | `components/encode.py`     | frames → portrait mp4 (+ optional RIFE de-spike)             |
 | `contracts/layout.py`      | run-dir layout + config-driven model registry (ckpt paths)  |
 | `pipeline.py`              | end-to-end local runner (wires the components)              |
-
-Outputs land in `outputs/<name>/`.
-
-## Data preprocessing (prepare the inputs)
-
-The pipeline consumes: a **video** (or pre-extracted frames) + a frame-0 reference
-**`ref0`** showing the NEW object in place — the only generative input besides the
-video. Make `ref0` with the Gemini edit stage:
-
-```bash
-# A) describe the new object
-python -m components.gemini_edit --image frame_00001.png --out ref0.png --source cup --target "a ripe yellow banana"
-# B) supply an image of the exact object you want
-python -m components.gemini_edit --image frame_00001.png --out ref0.png --source cup --ref_image my_banana.png
-```
-
-Needs `pip install google-genai` + `GEMINI_API_KEY` (see `.env.example`). The edit
-must stay pixel-aligned with frame 0. (`--backend assets` skips this — uses prepared
-anchors + masks instead.)
-
-## Run
-
-**Entry point: [`pipeline.py`](pipeline.py)** — the end-to-end runner. All params live
-in `config.yaml`:
-
-```bash
-conda activate editanything
-HF_HOME=/workspace/.hf_home python pipeline.py --config config.yaml
-```
-
-Any config value can be overridden on the CLI (`--name myrun --seed 7`). `HF_HOME`
-lets the gated SAM3 load. Outputs land in `outputs/<name>/`.
-
-- **Stop early / debug:** `--stop_after extract|mask|generate|composite|encode`
-- **One chunk:** `--segment_starts 0`
-- **Test one stage (toggle):** `python stage.py --config config.yaml --stage <extract|sam3|edit_mask|anchor|removal|generate|composite|encode>` — config-driven defaults, any input overridable (e.g. `--stage composite --plate_dir <clean> --object_dir <gen>`). Each component also has its own `python -m components.<x>` CLI.
-
-## How it works (brief)
-
-- **`backend: roma`** (any video): SAM3 masks the new object on `ref0` + the old object
-  on frame 0 → frame-0 edit region; `roma_warp` dense-warps it to every frame (edit masks)
-  and warps the whole `ref0` to each segment start (anchors). Only needs `ref0`.
-- **Length:** base model = 49 frames/pass; ≤49 → single pass, else multi-chunk reanchor,
-  segment starts auto-derived from the frame count.
-- **`--interpolate`** (RIFE de-spike): swaps each segment-boundary anchor frame for
-  `RIFE(n-1, n+1)` to kill the one-frame reanchor "pop" (native fps; needs `RIFE_BIN`).
-
-## Key params (`config.yaml`)
-
-| param | default | note |
-| --- | --- | --- |
-| `backend` | `roma` | `roma` (any video) / `assets` (prepared) |
-| `dilate` | 12 | edit-region padding (px) — **not yet scale-relative; applied at both mask + generate** |
-| `steps` / `guidance` | 50 / 6.0 | DPM-trailing sampling |
-| `seed` | 42 | reproducibility |
-| `segment_starts` | auto | `0,48,96,…` once past 49 frames |
-| `out_size` / `fps` | 480x832 / 25 | final portrait |
-| `interpolate` | true | RIFE boundary de-spike |
-
-Internals: 720×480 work res, `id_pool_resample_learnable=True`, sequential CPU offload +
-VAE tiling; ~11 min/segment, ~22 GB peak. RoMa backend skips composite (warped-anchor
-composite would ghost the hand).
 
 ## Known limitations
 
@@ -248,10 +263,10 @@ What's done vs. still open.
 - [x] Composite + portrait encode + RIFE anchor de-spike (`components/composite.py`, `encode.py`)
 - [x] End-to-end fixed-param pipeline driven by `config.yaml` (`pipeline.py`)
 - [x] Decoupled components + `contracts/` registry; VideoPainter & sam3 as git submodules
+- [x] **Source-object shadow removal** — ROSE clean-plate removal (`components/removal.py`, separate `rose` env) + composite the new object onto the clean plate, via `--removal rose` (Role-1 post-processing). Verified on 100 frames.
 
 **Open — quality**
 
-- [ ] **Source-object shadow removal** — shadow sits outside the SAM3 mask, so it stays. Add ROSE clean-plate removal, or grow the edit region to repaint it.
 - [ ] **Irregular-hull edit region** — replace the current (target∪source) **bbox** with an alpha-based irregular hull (RoMa-warp → dilate) that hugs the object and covers the shadow.
 
 **Open — agentic system** (see Roadmap)
