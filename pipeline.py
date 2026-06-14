@@ -41,6 +41,10 @@ def _limit_frames(src_dir, n, dst_dir):
     return dst_dir
 
 
+def _stage(msg):
+    print(f"\n{'='*66}\n=== STAGE: {msg}\n{'='*66}", flush=True)
+
+
 def main():
     ap = argparse.ArgumentParser(description="End-to-end video object replacement")
     ap.add_argument("--config", help="YAML config file; its values become defaults, CLI flags override")
@@ -114,6 +118,7 @@ def main():
     d_frames = rp.frames_src
 
     # 1. frames
+    _stage("extract / frames")
     if args.frames_dir:
         d_frames = args.frames_dir
         if args.max_frames:
@@ -135,6 +140,7 @@ def main():
         return
 
     # 2-4. edit-region masks + per-segment anchors
+    _stage(f"edit masks + anchors (backend={args.backend}, region={args.region_shape})")
     if args.backend == "assets":
         em = edit_mask_mod.get_edit_mask("assets", assets_dir=args.assets)
         an = anchor_mod.get_anchor("assets", assets_dir=args.assets)
@@ -168,6 +174,7 @@ def main():
         return
 
     # 5. generate (load models once, loop segments)
+    _stage(f"generate — VideoPainter ({len(starts)} segment(s): {starts})")
     if not (args.resume and extract.has_frames(rp.gen_frames)):
         pipe = videopainter.load_pipeline(args.model_path, args.branch, args.id_lora)
         videopainter.generate(pipe, d_frames, d_mask, an.anchor_for_start, rp.gen,
@@ -182,6 +189,7 @@ def main():
     # silhouette), which the roma backend doesn't otherwise compute, so derive it here.
     clean_plate = None
     if args.removal == "rose":
+        _stage("ROSE removal — clean plate (rose env)")
         from components import removal
         if not (args.resume and extract.has_frames(rp.mask_src)):
             from components import sam3_mask
@@ -195,6 +203,7 @@ def main():
     # 6. composite. Default OFF for RoMa anchors (replace_gt already keeps the
     # background) — UNLESS removal=rose, where we composite the new object onto the
     # ROSE clean plate so the source object's shadow leaves the final output.
+    _stage("composite")
     if args.removal == "rose":
         total = len(glob.glob(f"{clean_plate}/frame_*.png"))   # clean plate is 16n+1 (<= n)
         composite_step.composite(clean_plate, rp.gen_frames, d_mask, rp.composite, total=total)
@@ -210,6 +219,7 @@ def main():
         return
 
     # 7. encode portrait (+ optional RIFE anchor de-spike).
+    _stage("encode (+ RIFE de-spike)" if args.interpolate else "encode")
     anchor_frames = [s + 1 for s in starts if s > 0]   # 1-indexed boundary frames
     if args.interpolate and anchor_frames:
         src_dir = encode_step.despike_anchors(src_dir, rp.despike, anchor_frames)
