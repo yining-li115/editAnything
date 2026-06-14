@@ -8,9 +8,9 @@ import os
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))   # repo root (parent of contracts/)
 
-# Model registry: checkpoint paths per candidate. Defaults point at the current
-# VideoPainter/ckpt layout; override via config/CLI (and later: move to ROOT/ckpt).
-_CKPT = os.path.join(ROOT, "VideoPainter", "ckpt")
+# Model registry: checkpoint paths per candidate. Weights live in the top-level,
+# gitignored ckpt/ (separate from the vendored model source). Override via config/CLI.
+_CKPT = os.path.join(ROOT, "ckpt")
 MODELS = {
     "videopainter": {
         "model_path": os.path.join(_CKPT, "CogVideoX-5b-I2V"),

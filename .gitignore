@@ -1,5 +1,4 @@
-# SAM 3 is cloned separately on the server and installed via `pip install -e .`
-sam3/
+# SAM 3 is a git submodule (facebookresearch/sam3); installed via `pip install -e ./sam3`
 
 # Model checkpoints (kept outside the repo)
 ckpt/
