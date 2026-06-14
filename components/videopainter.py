@@ -13,10 +13,11 @@ offload + VAE tiling). The only change is structural: `load_pipeline()` runs onc
 and `run_segment()` is called per segment, instead of spawning a fresh process
 (and reloading ~10GB of weights) for each of the 7 segments.
 
-Per-segment "reanchor": the long video is split into segments (default starts
-0,48,96,144,192,240,251 — each 49 frames). Each segment is generated as one
-49-frame clip conditioned on its own clean anchor frame, which is what stops the
-inserted object from dissolving after the first clip.
+Per-segment "reanchor": the long video is split into 49-frame segments whose
+starts are derived from the clip length (`default_segments`, length-adaptive — no
+hardcoded frame count). Each segment is generated as one 49-frame clip conditioned
+on its own clean anchor frame, which is what stops the inserted object from
+dissolving after the first clip.
 """
 import os
 os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
@@ -37,8 +38,15 @@ from diffusers import (
 # Work resolution and clip length are fixed by the base model (CogVideoX-5B-I2V).
 W, H, CLIP = 720, 480, 49
 
-# The validated exp3 reanchor segmentation of a 300-frame clip.
-DEFAULT_SEGMENT_STARTS = [0, 48, 96, 144, 192, 240, 251]
+def default_segments(n, clip=CLIP, step=48):
+    """Auto segment starts for an n-frame clip: every `step` frames + a tail window
+    so the last `clip` frames are always covered. Length-adaptive — works for ANY
+    video length (no hardcoded frame count)."""
+    starts = list(range(0, max(1, n - clip + 1), step))
+    tail = n - clip
+    if tail > starts[-1]:
+        starts.append(tail)
+    return starts
 
 
 def load_pipeline(model_path, branch, id_lora, dtype=torch.bfloat16, device=None):
@@ -146,7 +154,8 @@ def generate(pipe, frames_dir, mask_dir, anchor_for_start, out_dir, *,
     Frames are written to {out_dir}/frames/frame_{start+i+1:05d}.png; later
     segments overwrite the 1-frame boundary overlap, yielding a contiguous set.
     """
-    segment_starts = segment_starts if segment_starts is not None else DEFAULT_SEGMENT_STARTS
+    if segment_starts is None:                       # derive from the actual clip length
+        segment_starts = default_segments(len(_frame_names(frames_dir)))
     frames_out = os.path.join(out_dir, "frames")
     os.makedirs(frames_out, exist_ok=True)
     for s in segment_starts:
@@ -174,7 +183,8 @@ if __name__ == "__main__":
     ap.add_argument("--out_dir", required=True)
     ap.add_argument("--prompt", required=True, help="global generation prompt for the edited video")
     ap.add_argument("--segment_starts", default=None,
-                    help="comma list, e.g. 0,48,96,144,192,240,251 (default) or a single start for one chunk")
+                    help="comma list, e.g. 0,48,96 or a single start for one chunk "
+                         "(default: auto from frame count via default_segments)")
     ap.add_argument("--total", type=int, default=CLIP)
     ap.add_argument("--model_path", default="VideoPainter/ckpt/CogVideoX-5b-I2V")
     ap.add_argument("--branch", default="VideoPainter/ckpt/VideoPainter/checkpoints/branch")
@@ -185,8 +195,8 @@ if __name__ == "__main__":
     ap.add_argument("--seed", type=int, default=42)
     args = ap.parse_args()
 
-    starts = ([int(x) for x in args.segment_starts.split(",")]
-              if args.segment_starts else DEFAULT_SEGMENT_STARTS)
+    starts = ([int(x) for x in args.segment_starts.split(",")] if args.segment_starts
+              else default_segments(len(_frame_names(args.frames_dir))))
 
     def anchor_for_start(s):
         return Image.open(f"{args.anchor_dir}/anchor_{s:04d}.png")

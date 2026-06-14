@@ -22,6 +22,7 @@ import io
 
 DEFAULT_MODEL = "gemini-2.5-flash-image"
 HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(HERE)                          # repo root (parent of components/)
 
 # Mode A: pure text description of the replacement object.
 TEXT_TEMPLATE = (
@@ -45,7 +46,7 @@ REF_TEMPLATE = (
 def load_dotenv(path=None):
     """Minimal .env loader (no dependency). Reads KEY=VALUE lines into os.environ
     without overriding already-set vars. Defaults to editAnything/.env."""
-    path = path or os.path.join(HERE, ".env")
+    path = path or os.path.join(ROOT, ".env")
     if not os.path.exists(path):
         return
     with open(path) as f:

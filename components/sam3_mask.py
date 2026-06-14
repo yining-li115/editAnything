@@ -87,6 +87,20 @@ def track(predictor, frames_dir, text, out_mask_dir, *, work_dir=None):
     return out_mask_dir
 
 
+def mask_image(predictor, image_path, word, *, work_dir, tag="img"):
+    """Run SAM3 `word` on a SINGLE image; return its 0/255 mask (HxW uint8).
+
+    Wraps `track` (which wants a frame folder) for the one-image case used to mask
+    the new object on ref0 and the old object on frame 0. Mirrors the old
+    anchors._sam3_mask helper.
+    """
+    tmp = os.path.join(work_dir, f"_sam3_{tag}")
+    os.makedirs(tmp, exist_ok=True)
+    shutil.copy(image_path, os.path.join(tmp, "frame_00001.png"))
+    track(predictor, tmp, word, tmp + "_mask")
+    return cv2.imread(os.path.join(tmp + "_mask", "frame_00001.png"), 0)
+
+
 if __name__ == "__main__":
     import argparse
     ap = argparse.ArgumentParser(description="SAM3 text-prompt per-frame mask")
