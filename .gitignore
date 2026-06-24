@@ -40,3 +40,6 @@ eval/run_logs/
 eval/manifest.json
 eval/summary.md
 eval/summary.csv
+
+run.sbatch
+components/run_mcp_client.sbatch
