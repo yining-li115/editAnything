@@ -26,20 +26,26 @@ ROOT = os.path.dirname(HERE)                          # repo root (parent of com
 
 # Mode A: pure text description of the replacement object.
 TEXT_TEMPLATE = (
-    "Replace the {source} in this image with {target}. "
-    "Keep EVERYTHING else identical: same camera framing, same composition, same "
-    "background, lighting, hand, table and reflections. Do not move or rescale the "
-    "scene. Output the full edited image at the same aspect ratio."
+    "Edit this photo with a single minimal change: replace ONLY the {source} with {target}. "
+    "Place {target} exactly where the {source} was, matching its size, position, scale and "
+    "perspective. Every other pixel must stay identical to the original: same camera and "
+    "framing, same composition, same background, lighting, colors, shadows and reflections, "
+    "and the SAME objects and people already present. Do NOT add, remove, move or invent "
+    "anything else — in particular do not add a hand, person, plant or object that is not "
+    "already in the photo, and do not restyle or relight the scene. Output the full edited "
+    "photo at the same resolution and aspect ratio."
 )
 
 # Mode B: use the object shown in a reference image.
 REF_TEMPLATE = (
     "The first image is a video frame. The second image shows an object on a clean "
-    "background. Replace the {source} in the first image with the object from the "
-    "second image. Match its size, position and perspective to where the {source} was. "
-    "Keep EVERYTHING else in the first image identical: same camera framing, "
-    "composition, background, lighting, hand, table and reflections. Output the full "
-    "edited first image at the same aspect ratio."
+    "background. Make a single minimal edit to the first image: replace ONLY the {source} "
+    "with the object from the second image, matching its size, position and perspective to "
+    "where the {source} was. Every other pixel of the first image must stay identical: same "
+    "camera, framing, composition, background, lighting, colors, shadows and reflections, "
+    "and the same objects and people already present. Do NOT add, remove, move or invent "
+    "anything else (no new hand, person, plant or object) and do not restyle the scene. "
+    "Output the full edited first image at the same resolution and aspect ratio."
 )
 
 

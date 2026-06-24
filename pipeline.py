@@ -66,6 +66,10 @@ def main():
                     "object on ref0 (default: --target)")
     ap.add_argument("--mask_mode", default="union", choices=["union", "source", "target"],
                     help="edit region: SAM3∪target (default), SAM3 only, or provider target only")
+    ap.add_argument("--source_mask", default="track", choices=["track", "warp"],
+                    help="(roma) how the OLD object is covered per frame: 'track' = per-frame "
+                         "SAM3 source mask ∪ RoMa-propagated frame-0 target (default, robust to "
+                         "source motion/occlusion); 'warp' = legacy, source folded into the warped seed")
     # generation params (validated exp3 reanchor)
     ap.add_argument("--segment_starts", default=None, help="comma list; default auto from frame count")
     ap.add_argument("--dilate", type=int, default=12)
@@ -75,6 +79,10 @@ def main():
     ap.add_argument("--steps", type=int, default=50)
     ap.add_argument("--guidance", type=float, default=6.0)
     ap.add_argument("--seed", type=int, default=42)
+    ap.add_argument("--offload", default=None, choices=["sequential", "model", "none"],
+                    help="VideoPainter CPU-offload: sequential (~22GB, slow, default for "
+                         "small cards) | model | none (~44GB, fastest, needs 80GB). "
+                         "Falls back to $VP_OFFLOAD then 'sequential' if unset.")
     # output
     ap.add_argument("--out_root", default=None, help="base dir for outputs (default: repo -> outputs/<name>)")
     ap.add_argument("--out_size", default=None, help="final WxH (default = native frame size)")
@@ -157,15 +165,31 @@ def main():
             work_dir=rp.roma, segment_starts=starts)
         target_mask_dir = em.mask_dir   # triggers RoMa edit masks
 
+    def _source_track():
+        """Per-frame SAM3 source masks -> rp.mask_src. Idempotent: computed once per
+        run, then reused (also by ROSE), so source SAM3 never runs twice."""
+        if extract.has_frames(rp.mask_src):
+            print(f"[pipeline] reusing per-frame source masks in {rp.mask_src}")
+            return rp.mask_src
+        from components import sam3_mask
+        sam3_mask.track(sam3_mask.build_predictor(), d_frames, args.source, rp.mask_src)
+        return rp.mask_src
+
     if args.backend == "roma":
-        d_mask = target_mask_dir        # frame-0 (target∪source) bbox, warped per frame
+        if args.source_mask == "track":
+            # generous warped seed (keeps the new object inside every frame) PLUS the
+            # per-frame SAM3 source (covers the moving/occluded old object where the warp
+            # drifts off it), then dilate. Union only adds coverage — the object never
+            # falls out of the seed, and the source leak is closed.
+            d_mask = edit_mask_mod.union_masks(_source_track(), target_mask_dir, rp.mask,
+                                               dilate=args.dilate)
+        else:  # warp: warped (target∪source) seed only — legacy, leaks a moving source
+            d_mask = target_mask_dir
     elif args.mask_mode == "target":
         assert target_mask_dir, "mask_mode=target but provider has no target masks"
         d_mask = target_mask_dir
     else:
-        if not (args.resume and extract.has_frames(rp.mask_src)):
-            from components import sam3_mask
-            sam3_mask.track(sam3_mask.build_predictor(), d_frames, args.source, rp.mask_src)
+        _source_track()
         if args.mask_mode == "source":
             d_mask = rp.mask_src
         else:  # union
@@ -176,7 +200,8 @@ def main():
     # 5. generate (load models once, loop segments)
     _stage(f"generate — VideoPainter ({len(starts)} segment(s): {starts})")
     if not (args.resume and extract.has_frames(rp.gen_frames)):
-        pipe = videopainter.load_pipeline(args.model_path, args.branch, args.id_lora)
+        pipe = videopainter.load_pipeline(args.model_path, args.branch, args.id_lora,
+                                          offload=args.offload)
         videopainter.generate(pipe, d_frames, d_mask, an.anchor_for_start, rp.gen,
                               segment_starts=starts, total=CLIP, prompt=args.prompt,
                               dilate=args.dilate, steps=args.steps, guidance=args.guidance,
@@ -185,15 +210,13 @@ def main():
         return
 
     # 5.5 ROSE removal -> clean plate (source object + its shadow removed). Runs in
-    # its own `rose` conda env as a subprocess; needs a per-frame SOURCE mask (cup
-    # silhouette), which the roma backend doesn't otherwise compute, so derive it here.
+    # its own `rose` conda env as a subprocess; needs the per-frame SOURCE mask, which
+    # _source_track() has usually already produced (source_mask=track) and is reused here.
     clean_plate = None
     if args.removal == "rose":
         _stage("ROSE removal — clean plate (rose env)")
         from components import removal
-        if not (args.resume and extract.has_frames(rp.mask_src)):
-            from components import sam3_mask
-            sam3_mask.track(sam3_mask.build_predictor(), d_frames, args.source, rp.mask_src)
+        _source_track()
         if not (args.resume and extract.has_frames(rp.clean_frames)):
             removal.remove(d_frames, rp.mask_src, rp.removal)
         clean_plate = rp.clean_frames

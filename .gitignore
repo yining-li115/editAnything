@@ -28,3 +28,15 @@ __pycache__/
 
 # macOS
 .DS_Store
+
+# Runtime env (contains HF_TOKEN etc.) — keep out of git
+runtime_env.sh
+# HuggingFace cache (SAM3 weights etc.)
+.hf_home/
+# Eval generated artifacts (reproducible from prompt_spec.yaml + code)
+eval/configs/
+eval/results/
+eval/run_logs/
+eval/manifest.json
+eval/summary.md
+eval/summary.csv

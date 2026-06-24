@@ -39,7 +39,14 @@ class AssetsEditMask:
 
 
 class RomaEditMask:
-    """Build frame-0 (target∪source) bbox+dilate region, RoMa-warp it per frame."""
+    """Build the frame-0 (target ∪ source) seed, shape it generously (region_shape +
+    dilate), and RoMa-warp it per frame. The TARGET half carries the new object's
+    SHAPE — VideoPainter squashes the new object to fit its mask, so the mask must be
+    the new object's silhouette, not the old object's (and the new object isn't in the
+    source video, so only warping ref0 can place it). The generous shaping keeps the new
+    object inside the mask despite warp drift, so it doesn't dissolve. The per-frame SAM3
+    source (source_mask=track) is unioned ON TOP of this seed in the pipeline; it only
+    ADDS coverage for the moving old object, never reshapes this seed."""
     def __init__(self, frames_dir, ref0_path, target_word, work_dir, *,
                  device="cuda", ref0_mask_path=None, source_word=None, dilate=12,
                  region_shape="hull"):
@@ -67,12 +74,19 @@ class RomaEditMask:
         else:
             target_mask0 = sam3_mask.mask_image(predictor, self.ref0_path,
                                                 self.target_word, work_dir=self.work_dir, tag="newobj")
+        target_mask0 = cv2.resize(target_mask0, (w0, h0), interpolation=cv2.INTER_NEAREST)
         source_mask0 = sam3_mask.mask_image(predictor, frame0, self.source_word,
                                             work_dir=self.work_dir, tag="srcobj")
-        target_mask0 = cv2.resize(target_mask0, (w0, h0), interpolation=cv2.INTER_NEAREST)
         source_mask0 = cv2.resize(source_mask0, (w0, h0), interpolation=cv2.INTER_NEAREST)
-        # frame-0 edit region from (target ∪ source) + margin; RoMa warps it per frame.
         u = ((target_mask0 > 127) | (source_mask0 > 127)).astype(np.uint8)
+        if not u.any():
+            # SAM3 found neither the new object (on ref0) nor the old object (on frame0).
+            # Nothing to seed the warp with — fail cleanly instead of crashing cv2 on an
+            # empty point set, so run_batch records a readable FAIL and moves on.
+            raise ValueError(
+                f"edit_mask: empty SAM3 region — target_word={self.target_word!r} not "
+                f"found on ref0 and source_word={self.source_word!r} not found on frame0; "
+                "skip or fix the target_word/ref0 for this case")
         pad = max(1, int(self.dilate))
         k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * pad + 1, 2 * pad + 1))
         u = cv2.morphologyEx(u, cv2.MORPH_CLOSE, k)   # bridge src/tar into one blob
@@ -122,10 +136,13 @@ class RomaEditMask:
         return self._mask_dir
 
 
-def union_masks(source_dir, target_dir, out_dir):
-    """Per-frame OR of two mask dirs (keyed by frame name), at source resolution.
-    Used by the assets/sam3 path (mask_mode=union) to combine SAM3 source ∪ target."""
+def union_masks(source_dir, target_dir, out_dir, *, dilate=0):
+    """Per-frame OR of two mask dirs (keyed by frame name), at source resolution, then
+    optionally dilate the union by `dilate` px. Combines per-frame SAM3 source ∪
+    RoMa-warped target into the edit region (mask_mode=union / source_mask=track)."""
     os.makedirs(out_dir, exist_ok=True)
+    k = (cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * dilate + 1, 2 * dilate + 1))
+         if dilate > 0 else None)
     names = [os.path.basename(p) for p in sorted(glob.glob(f"{source_dir}/frame_*.png"))]
     for n in names:
         a = cv2.imread(f"{source_dir}/{n}", 0)
@@ -136,8 +153,10 @@ def union_masks(source_dir, target_dir, out_dir):
             if b.shape != a.shape:
                 b = cv2.resize(b, (a.shape[1], a.shape[0]), interpolation=cv2.INTER_NEAREST)
             m = ((m > 0) | (b > 127)).astype(np.uint8)
+        if k is not None:
+            m = cv2.dilate(m, k)
         cv2.imwrite(f"{out_dir}/{n}", (m * 255).astype(np.uint8))
-    print(f"[edit_mask] union edit-region masks -> {out_dir} ({len(names)} frames)")
+    print(f"[edit_mask] union edit-region masks -> {out_dir} ({len(names)} frames, dilate={dilate})")
     return out_dir
 
 

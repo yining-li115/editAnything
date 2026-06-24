@@ -49,7 +49,7 @@ def default_segments(n, clip=CLIP, step=48):
     return starts
 
 
-def load_pipeline(model_path, branch, id_lora, dtype=torch.bfloat16, device=None):
+def load_pipeline(model_path, branch, id_lora, dtype=torch.bfloat16, device=None, offload=None):
     """Build the VideoPainter native long-video ID-resample pipeline (load once).
 
     Mirrors run_replacement.py exactly: id_pool transformer + VideoPainterID LoRA,
@@ -71,8 +71,23 @@ def load_pipeline(model_path, branch, id_lora, dtype=torch.bfloat16, device=None
         m.requires_grad_(False)
     pipe.scheduler = CogVideoXDPMScheduler.from_config(
         pipe.scheduler.config, timestep_spacing="trailing")
-    # Memory savers — same as the validated run; keeps peak VRAM ~22GB.
-    pipe.enable_sequential_cpu_offload()
+    # Memory/speed trade-off. Source order: explicit `offload` arg (from config/CLI) >
+    # VP_OFFLOAD env var > "sequential" default — so a rented small card can force
+    # sequential in the config, while a big card uses none without code changes.
+    #   sequential -> enable_sequential_cpu_offload(): peak VRAM ~22GB but slow
+    #                 (~15 min/segment) — PCIe-bound shuttling weights every step.
+    #   model      -> enable_model_cpu_offload(): coarser offload, faster, more VRAM.
+    #   none       -> keep everything resident on GPU: fastest (~44GB resident) —
+    #                 fine on an 80GB card running solo; OOMs a small card.
+    mode = (offload or os.environ.get("VP_OFFLOAD") or "sequential").lower()
+    if mode == "sequential":
+        pipe.enable_sequential_cpu_offload()
+    elif mode == "model":
+        pipe.enable_model_cpu_offload()
+    elif mode in ("none", "off", "false", "0"):
+        pipe.to(device or "cuda")
+    else:
+        raise ValueError(f"offload must be sequential|model|none, got {mode!r}")
     pipe.vae.enable_slicing()
     pipe.vae.enable_tiling()
     return pipe
