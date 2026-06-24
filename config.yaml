@@ -4,8 +4,9 @@
 # built-in default. Paths may be absolute or relative to where you run the command.
 
 # ---------- input ----------  (see input/README.txt)
-# video: input/cup2.mp4                  # full 300f (7 chunks)
-frames_dir: input/frames_2chunk           # 97 frames -> 2 chunks (this run)
+#video: /storage/slurm/s0037/input/cup2.mp4                # full 300f (7 chunks)
+
+frames_dir: /storage/slurm/s0037/input/frames_2chunk           # 97 frames -> 2 chunks (this run)
 
 # ---------- what to replace ----------
 source: cup                               # OLD object to remove (SAM3 noun)
@@ -14,10 +15,11 @@ target_word: banana                       # NEW object noun for SAM3 on ref0 (bl
 prompt: "a ripe yellow banana resting on a glossy dark round table, a hand with a ring on the table, smooth reflective tabletop, soft natural light, pale blue-grey wall"
 
 name: cup2_2chunk          # outputs -> /root/project/outputs/cup2_2chunk/
+out_root: /storage/slurm/s0037/outputs
 
 # ---------- anchors + edit region ----------
 backend: roma                             # roma (general) | assets (use prepared anchors+masks)
-ref0: input/replacement.png               # (roma) frame-0 reference: new object on frame 0
+ref0: /storage/slurm/s0037/input/replacement.png               # (roma) frame-0 reference: new object on frame 0
 # ref0_mask:                              # (roma) optional precomputed frame-0 target mask (else SAM3)
 # assets:                                 # (assets) dir containing anchors/ and banana_masks/
 # mask_mode: union                        # (assets only) union | source | target
@@ -36,6 +38,6 @@ interpolate: true                         # RIFE anchor de-spike (smooth segment
 no_composite: false                       # roma backend skips composite automatically regardless
 
 # ---------- models (blank -> repo defaults under VideoPainter/ckpt) ----------
-# model_path:
-# branch:
-# id_lora:
+model_path: /storage/slurm/s0037/ckpts/CogVideoX-5b-I2V
+branch: /storage/slurm/s0037/ckpts/VideoPainter/VideoPainter/checkpoints/branch
+id_lora: /storage/slurm/s0037/ckpts/VideoPainter/VideoPainterID/checkpoints
