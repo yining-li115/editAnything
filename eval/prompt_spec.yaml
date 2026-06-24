@@ -1,0 +1,259 @@
+# Benchmark prompt spec — 30 videos × 3 difficulty tiers (easy / medium / hard).
+#
+# Tier definitions:
+#   easy   = same category, near-identical silhouette, photoreal   (baseline fidelity + relight)
+#   medium = different object, different silhouette, photoreal      (shape change -> shadow recast + edge reblend)
+#   hard   = large style/material/identity shift, often non-natural (style match + physical-plausibility limit)
+#
+# Per video:
+#   source        : SAM3 noun for the OLD object to remove (must be segmentable in the clip)
+#   scene         : scene/lighting descriptor, appended to every target to form the long `prompt`
+#   failure_mode  : the scene's primary stress (shadow | reflection | occlusion | motion | sky | large) — for analysis
+#   easy/medium/hard:
+#       target       : short new-object description (drives Gemini ref0 + CLIP + VLM)
+#       target_word  : SAM3 noun for the NEW object on ref0 (concrete & segmentable!)
+#
+# The generator builds:  prompt = "{target}, {scene}"   and one config per (video, tier).
+# EDIT FREELY before we generate ref0s.
+
+videos:
+
+  cup0:
+    source: cup
+    scene: "on a glossy pale-pink round table, smooth reflective tabletop, soft studio light, plain blue wall"
+    failure_mode: reflection
+    easy:   { target: "a white ceramic mug", target_word: "mug" }
+    medium: { target: "a ripe yellow banana", target_word: "banana" }
+    hard:   { target: "a glowing cyan cyberpunk orb", target_word: "orb" }
+
+  cup1:
+    source: cup
+    scene: "on a table in front of a seated person, indoor ambient light"
+    failure_mode: occlusion
+    easy:   { target: "a tall glass tumbler", target_word: "glass" }
+    medium: { target: "a green apple", target_word: "apple" }
+    hard:   { target: "a small robot head with glowing eyes", target_word: "robot head" }
+
+  cup2:
+    source: cup
+    scene: "on a glossy dark round table, a hand with a ring resting nearby, smooth reflective tabletop, soft natural light, pale blue-grey wall"
+    failure_mode: reflection
+    easy:   { target: "a stainless steel travel mug", target_word: "mug" }
+    medium: { target: "a ripe yellow banana", target_word: "banana" }
+    hard:   { target: "a brass steampunk teapot", target_word: "teapot" }
+
+  cup3:
+    source: cup
+    scene: "on a table, busy indoor background, ambient light"
+    failure_mode: reflection
+    easy:   { target: "a paper coffee cup", target_word: "cup" }
+    medium: { target: "a red bell pepper", target_word: "pepper" }
+    hard:   { target: "a crystal geode sphere", target_word: "sphere" }
+
+  cafe_pizza:
+    source: pizza
+    scene: "on a plate on a cafe table, warm ambient light, shallow depth of field"
+    failure_mode: shadow
+    easy:   { target: "a round cheese flatbread", target_word: "flatbread" }
+    medium: { target: "a stack of pancakes", target_word: "pancakes" }
+    hard:   { target: "a pizza made of glowing circuit boards", target_word: "pizza" }
+
+  cafe_table_with_cameras:
+    source: camera
+    scene: "on a cafe table, top-down framing, soft daylight"
+    failure_mode: shadow
+    easy:   { target: "a black DSLR camera", target_word: "camera" }
+    medium: { target: "a vintage rotary telephone", target_word: "telephone" }
+    hard:   { target: "a small cyberpunk drone with neon lights", target_word: "drone" }
+
+  desk_planner_and_keyboard:
+    source: planner
+    scene: "on a wooden desk next to a keyboard, soft daylight from the side"
+    failure_mode: shadow
+    easy:   { target: "a spiral notebook", target_word: "notebook" }
+    medium: { target: "a folded newspaper", target_word: "newspaper" }
+    hard:   { target: "a glowing holographic tablet", target_word: "tablet" }
+
+  empty_office_desk:
+    source: monitor
+    scene: "on a white office desk, cool overcast daylight from large windows"
+    failure_mode: reflection
+    easy:   { target: "a black computer monitor", target_word: "monitor" }
+    medium: { target: "a large potted plant", target_word: "plant" }
+    hard:   { target: "a futuristic holographic display panel", target_word: "panel" }
+
+  laptop_on_living_room_table:
+    source: laptop
+    scene: "open on a living-room coffee table, warm indoor light, reflective screen"
+    failure_mode: reflection
+    easy:   { target: "a silver laptop", target_word: "laptop" }
+    medium: { target: "an open hardcover book", target_word: "book" }
+    hard:   { target: "a glowing holographic floating screen", target_word: "screen" }
+
+  pen_holder_on_desk:
+    source: pen holder
+    scene: "on a desk by a window, soft directional daylight casting a shadow"
+    failure_mode: shadow
+    easy:   { target: "a ceramic pen cup", target_word: "cup" }
+    medium: { target: "a small potted succulent", target_word: "plant" }
+    hard:   { target: "a neon cyberpunk canister", target_word: "canister" }
+
+  iced_coffee_with_maple_leaves:
+    source: cup
+    scene: "an iced drink among maple leaves on a table, bright outdoor light, shadows"
+    failure_mode: shadow
+    easy:   { target: "a tall glass of iced tea", target_word: "glass" }
+    medium: { target: "a mason jar of lemonade", target_word: "jar" }
+    hard:   { target: "a neon-glowing potion bottle", target_word: "bottle" }
+
+  pomelo_in_sunlight:
+    source: pomelo
+    scene: "a citrus fruit on a table in strong directional sunlight, hard cast shadow"
+    failure_mode: shadow
+    easy:   { target: "a grapefruit", target_word: "grapefruit" }
+    medium: { target: "a red apple", target_word: "apple" }
+    hard:   { target: "a polished crystal sphere", target_word: "sphere" }
+
+  red_onion_on_plate:
+    source: onion
+    scene: "on a white plate on a table, soft light, gentle shadow on the plate"
+    failure_mode: shadow
+    easy:   { target: "a yellow onion", target_word: "onion" }
+    medium: { target: "a pomegranate", target_word: "pomegranate" }
+    hard:   { target: "a polished obsidian sphere", target_word: "sphere" }
+
+  picnic_baguettes_on_checkered_cloth:
+    source: baguette
+    scene: "on a red-and-white checkered picnic cloth, dappled outdoor light"
+    failure_mode: shadow
+    easy:   { target: "a ciabatta loaf", target_word: "bread" }
+    medium: { target: "a bunch of bananas", target_word: "bananas" }
+    hard:   { target: "a golden metallic baguette sculpture", target_word: "baguette" }
+
+  picnic_spread_with_pears:
+    source: pear
+    scene: "among a picnic spread on sand, bright outdoor light, soft shadows"
+    failure_mode: shadow
+    easy:   { target: "a green apple", target_word: "apple" }
+    medium: { target: "a ripe banana", target_word: "banana" }
+    hard:   { target: "a crystal pear ornament", target_word: "pear" }
+
+  picnic_with_gift_box_and_camera:
+    source: gift box
+    scene: "on a picnic blanket outdoors, soft daylight"
+    failure_mode: shadow
+    easy:   { target: "a wrapped present with a ribbon", target_word: "gift box" }
+    medium: { target: "a wooden treasure chest", target_word: "chest" }
+    hard:   { target: "a glowing cyberpunk cube", target_word: "cube" }
+
+  hand_arranging_fruits:
+    source: orange
+    scene: "in a fruit bowl while a hand arranges the fruit, indoor light"
+    failure_mode: occlusion
+    easy:   { target: "a tangerine", target_word: "tangerine" }
+    medium: { target: "a tomato", target_word: "tomato" }
+    hard:   { target: "a glass sphere ornament", target_word: "sphere" }
+
+  hand_picking_peaches:
+    source: peach
+    scene: "a hand picking from a pile of peaches, natural light"
+    failure_mode: occlusion
+    easy:   { target: "a nectarine", target_word: "nectarine" }
+    medium: { target: "a green apple", target_word: "apple" }
+    hard:   { target: "a golden metallic sphere", target_word: "sphere" }
+
+  hand_putting_grape_in_bowl:
+    source: grape
+    scene: "a hand placing fruit into a bowl, indoor light"
+    failure_mode: occlusion
+    easy:   { target: "a cluster of cherries", target_word: "cherries" }
+    medium: { target: "a strawberry", target_word: "strawberry" }
+    hard:   { target: "a glowing glass marble", target_word: "marble" }
+
+  woman_holding_donut:
+    source: donut
+    scene: "held up near a woman's face, soft indoor light"
+    failure_mode: occlusion
+    easy:   { target: "a glazed donut with sprinkles", target_word: "donut" }
+    medium: { target: "a croissant", target_word: "croissant" }
+    hard:   { target: "a glowing donut-shaped hologram", target_word: "donut" }
+
+  woman_cooking_in_kitchen:
+    source: tomatoes
+    scene: "cherry tomatoes on a wooden kitchen counter, a woman cooking in the soft-focus background"
+    failure_mode: occlusion
+    easy:   { target: "a bunch of red cherry tomatoes", target_word: "tomatoes" }
+    medium: { target: "a yellow bell pepper", target_word: "pepper" }
+    hard:   { target: "a cluster of glowing glass orbs", target_word: "orbs" }
+
+  writing_with_pen_and_watch:
+    source: pen
+    scene: "held in a writing hand over paper, a watch on the wrist, warm desk light"
+    failure_mode: occlusion
+    easy:   { target: "a fountain pen", target_word: "pen" }
+    medium: { target: "a paintbrush", target_word: "paintbrush" }
+    hard:   { target: "a glowing neon stylus", target_word: "stylus" }
+
+  man_dribbling_basketball:
+    source: basketball
+    scene: "being dribbled by a man on an outdoor court, bright daylight, ground shadow"
+    failure_mode: motion
+    easy:   { target: "a worn orange basketball", target_word: "basketball" }
+    medium: { target: "a soccer ball", target_word: "ball" }
+    hard:   { target: "a glowing wireframe energy sphere", target_word: "sphere" }
+
+  man_holding_soccer_ball:
+    source: soccer ball
+    scene: "held by a man outdoors, daylight"
+    failure_mode: occlusion
+    easy:   { target: "a volleyball", target_word: "volleyball" }
+    medium: { target: "a basketball", target_word: "basketball" }
+    hard:   { target: "a futuristic chrome sphere", target_word: "sphere" }
+
+  playing_soccer_on_field:
+    source: soccer ball
+    scene: "on a grass field being played, fast motion, bright daylight, ground shadow"
+    failure_mode: motion
+    easy:   { target: "a futsal ball", target_word: "ball" }
+    medium: { target: "a basketball", target_word: "basketball" }
+    hard:   { target: "a glowing plasma orb", target_word: "orb" }
+
+  soccer_cleats_on_turf:
+    source: cleats
+    scene: "a pair of cleats on green turf, daylight, contact shadow"
+    failure_mode: shadow
+    easy:   { target: "white soccer cleats", target_word: "cleats" }
+    medium: { target: "a pair of running sneakers", target_word: "sneakers" }
+    hard:   { target: "a pair of glowing futuristic boots", target_word: "boots" }
+
+  skateboard_by_graffiti_wall:
+    source: skateboard
+    scene: "leaning against a graffiti wall, daylight, wall shadow"
+    failure_mode: large
+    easy:   { target: "a longboard skateboard", target_word: "skateboard" }
+    medium: { target: "a wooden snowboard", target_word: "snowboard" }
+    hard:   { target: "a hoverboard with neon underglow", target_word: "hoverboard" }
+
+  suitcase_at_stand_here_line:
+    source: suitcase
+    scene: "standing on the floor at a marked line, indoor light, floor shadow"
+    failure_mode: large
+    easy:   { target: "a hardshell suitcase", target_word: "suitcase" }
+    medium: { target: "a large cardboard box", target_word: "box" }
+    hard:   { target: "a futuristic metal cargo pod", target_word: "pod" }
+
+  toy_dinosaurs:
+    source: dinosaur
+    scene: "small toy figures on a surface, soft indoor light"
+    failure_mode: occlusion
+    easy:   { target: "a green toy dinosaur", target_word: "dinosaur" }
+    medium: { target: "a toy elephant", target_word: "elephant" }
+    hard:   { target: "a robotic mecha dinosaur", target_word: "dinosaur" }
+
+  hot_air_balloon_at_dusk:
+    source: hot air balloon
+    scene: "in the dusk sky, soft gradient light, no ground"
+    failure_mode: sky
+    easy:   { target: "a striped hot air balloon", target_word: "balloon" }
+    medium: { target: "a blimp airship", target_word: "airship" }
+    hard:   { target: "a floating cyberpunk drone", target_word: "drone" }

@@ -1,5 +1,4 @@
-# SAM 3 is cloned separately on the server and installed via `pip install -e .`
-sam3/
+# SAM 3 is a git submodule (facebookresearch/sam3); installed via `pip install -e ./sam3`
 
 # Model checkpoints (kept outside the repo)
 ckpt/
@@ -30,4 +29,14 @@ __pycache__/
 # macOS
 .DS_Store
 
-src/run.sbatch
+# Runtime env (contains HF_TOKEN etc.) — keep out of git
+runtime_env.sh
+# HuggingFace cache (SAM3 weights etc.)
+.hf_home/
+# Eval generated artifacts (reproducible from prompt_spec.yaml + code)
+eval/configs/
+eval/results/
+eval/run_logs/
+eval/manifest.json
+eval/summary.md
+eval/summary.csv

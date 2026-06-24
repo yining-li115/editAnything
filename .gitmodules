@@ -1,0 +1,9 @@
+[submodule "sam3"]
+	path = submodules/sam3
+	url = https://github.com/facebookresearch/sam3.git
+[submodule "VideoPainter"]
+	path = submodules/VideoPainter
+	url = https://github.com/TencentARC/VideoPainter.git
+[submodule "ROSE"]
+	path = submodules/ROSE
+	url = https://github.com/Kunbyte-AI/ROSE.git

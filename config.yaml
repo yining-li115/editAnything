@@ -1,5 +1,5 @@
 # editAnything pipeline config.
-#   Run:  cd editAnything && python src/pipeline.py --config config.yaml
+#   Run:  cd editAnything && python pipeline.py --config config.yaml
 # Any CLI flag overrides the value here. Comment a line out to fall back to the
 # built-in default. Paths may be absolute or relative to where you run the command.
 
@@ -26,16 +26,26 @@ ref0: /storage/slurm/s0037/input/replacement.png               # (roma) frame-0 
 
 # ---------- generation ----------
 # segment_starts: [0, 48]                 # blank -> auto from frame count (every 48 + tail)
-dilate: 12                                # edit-region bbox padding (px)
+dilate: 12                                # edit-region margin (px), applied to the final mask
+source_mask: track                        # track -> warped (target∪source) seed PLUS per-frame SAM3 source,
+                                          #   then dilate (default; closes the moving-source leak while the
+                                          #   generous seed keeps the new object from dissolving)
+                                          # warp  -> legacy: warped seed only (leaks a moving/occluded source)
+region_shape: rect                        # shape of the warped seed: rect (rotated quad) | hull (tight) | bbox
 steps: 50
 guidance: 6.0
 seed: 42
+offload: sequential                       # VideoPainter VRAM/speed: sequential (~22GB, slow, safe on any card)
+                                          #   | model | none (~44GB, ~2.6x faster, needs an 80GB card running solo)
+                                          # (overrides $VP_OFFLOAD; comment out to fall back to the env var)
 
-# ---------- output ----------
+# ---------- post-processing / output ----------
+removal: rose                             # rose -> ROSE clean-plate removal of source object + shadow,
+                                          #   then composite new object onto it; none -> off
 out_size: 480x832                         # WxH; blank -> native frame size
 fps: 25
 interpolate: true                         # RIFE anchor de-spike (smooth segment boundaries)
-no_composite: false                       # roma backend skips composite automatically regardless
+no_composite: false                       # (only matters when removal=none; roma skips composite anyway)
 
 # ---------- models (blank -> repo defaults under VideoPainter/ckpt) ----------
 model_path: /storage/slurm/s0037/ckpts/CogVideoX-5b-I2V
