@@ -1,0 +1,160 @@
+"""
+Usage: python discord_bot.py
+Command: !replace "replace the cup with a banana" [+ attachment video OR Google Drive link]
+"""
+import discord
+import asyncio
+import os
+import re
+import subprocess
+import sys
+import json
+
+_HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, _HERE)
+
+from orchestrator import run
+from components.gemini_edit import load_dotenv
+load_dotenv()
+
+TOKEN = os.environ.get("DISCORD_BOT_TOKEN")
+WORKSPACE = _HERE
+MAX_FILE_MB = 25  # Discord free tier limit
+
+intents = discord.Intents.default()
+intents.message_content = True
+client = discord.Client(intents=intents)
+
+
+def extract_frames(video_path: str, frames_dir: str) -> int:
+    os.makedirs(frames_dir, exist_ok=True)
+    subprocess.run([
+        "ffmpeg", "-y", "-i", video_path,
+        "-start_number", "1",
+        f"{frames_dir}/frame_%05d.png"
+    ], check=True, capture_output=True)
+    return len([f for f in os.listdir(frames_dir) if f.endswith(".png")])
+
+
+def download_gdrive(url: str, out_path: str):
+    subprocess.run(["yt-dlp", "-o", out_path, url], check=True)
+
+
+def find_output_video(result: str) -> str | None:
+    m = re.search(r'(/[\w/._-]+\.mp4)', result)
+    if m and os.path.exists(m.group(1)):
+        return m.group(1)
+    return None
+
+async def process_request(message, prompt: str, video_path: str):
+    job_id = str(message.id)
+    job_dir = os.path.join(WORKSPACE, "jobs", job_id)
+    frames_dir = os.path.join(job_dir, "frames")
+
+    try:
+        await message.channel.send("🎞️ Frame extraction...")
+        n_frames = extract_frames(video_path, frames_dir)
+        await message.channel.send(f"✅ {n_frames} frames extracted")
+
+        enriched_prompt = (
+            f"{prompt}. "
+            f"Frames are at {frames_dir}. "
+            f"There are {n_frames} frames total. "
+            f"Do NOT run rose_removal."
+
+        )
+
+        n_segments = max(1, n_frames // 48)
+        await message.channel.send(
+            f"🚀 Pipeline running (~{n_segments * 8}-{n_segments * 15} min)...")
+        result = await asyncio.wait_for(
+            asyncio.get_event_loop().run_in_executor(
+                None, run, enriched_prompt
+            ),
+            timeout=5400
+        )
+        video_out = find_output_video(result)
+        if video_out:
+            size_mb = os.path.getsize(video_out) / 1e6
+            if size_mb <= MAX_FILE_MB:
+                await message.channel.send(
+                    "✅ Finished!",
+                    file=discord.File(video_out))
+            else:
+                # upload via file.io if too big
+                r = subprocess.run(
+                    ["curl", "-F", f"file=@{video_out}", "https://file.io"],
+                    capture_output=True, text=True)
+                link = json.loads(r.stdout).get("link", "lien indisponible")
+                await message.channel.send(f"✅ Finished! Video: {link}")
+        else:
+            await message.channel.send(f"✅ Pipeline finished:\n```{result[:500]}```")
+
+    except asyncio.TimeoutError:
+        await message.channel.send("❌ Pipeline timed out after 90 minutes.")
+    
+    except Exception as e:
+        await message.channel.send(f"❌ Error: {str(e)[:500]}")
+    finally:
+        # nettoyage vidéo source
+        if os.path.exists(video_path):
+            os.remove(video_path)
+
+
+@client.event
+async def on_ready():
+    print(f"[bot] connected as {client.user}")
+
+
+@client.event
+async def on_message(message):
+    if message.author == client.user:
+        return
+    if not message.content.startswith("!replace"):
+        return
+
+    prompt = message.content[len("!replace"):].strip()
+    if not prompt:
+        await message.channel.send(
+            "Usage: `!replace <description>` with a video attachment\n"
+            "Example: `!replace replace the cup with a banana`")
+        return
+
+    job_id = str(message.id)
+    job_dir = os.path.join(WORKSPACE, "jobs", job_id)
+    os.makedirs(job_dir, exist_ok=True)
+    video_path = os.path.join(job_dir, "input.mp4")
+
+    # cas 1: pièce jointe Discord
+    if message.attachments:
+        att = message.attachments[0]
+        if not att.filename.endswith((".mp4", ".mov", ".avi", ".mkv")):
+            await message.channel.send("❌ Supported formats: mp4, mov, avi, mkv")
+            return
+        await message.channel.send("⬇️ Downloading video...")
+        await att.save(video_path)
+        await process_request(message, prompt, video_path)
+
+    # cas 2: lien Google Drive / YouTube
+    elif "drive.google.com" in message.content or "youtu" in message.content:
+        url_match = re.search(r'https?://[^\s]+', message.content)
+        if not url_match:
+            await message.channel.send("❌ Invalid link")
+            return
+        await message.channel.send("⬇️ Downloading from link...")
+        try:
+            download_gdrive(url_match.group(0), video_path)
+        except Exception as e:
+            await message.channel.send(f"❌ Error downloading: {e}")
+            return
+        await process_request(message, prompt, video_path)
+
+    else:
+        await message.channel.send(
+            "❌ Please provide a video attachment or a Google Drive link")
+
+
+if __name__ == "__main__":
+    if not TOKEN:
+        raise RuntimeError("Set DISCORD_BOT_TOKEN in .env")
+    client.run(TOKEN)
