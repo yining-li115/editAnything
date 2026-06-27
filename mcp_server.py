@@ -250,6 +250,7 @@ def videopainter_generate(
     resume: bool = False,
 ) -> dict:
     global _vp_pipeline
+    global _sam3_predictor
     try:
         _guard("videopainter_generate", {
             "frames_dir": frames_dir, "mask_dir": mask_dir, "anchor_map": anchor_map,
@@ -265,7 +266,12 @@ def videopainter_generate(
             n = _count_frames(gen_frames_dir)
             print(f"[videopainter_generate] resume: reusing {n} frames in {gen_frames_dir}")
             return _ok(gen_frames_dir=gen_frames_dir, n_frames_generated=n)
-
+        if _sam3_predictor is not None:
+            print("[videopainter_generate] evicting SAM3 from VRAM before loading VP...")
+            _sam3_predictor = None
+            import torch, gc
+            gc.collect()
+            torch.cuda.empty_cache()
         cache_key = (model_path, branch, id_lora)
         if cache_key not in _vp_pipeline:
             print("[videopainter_generate] loading pipeline (first call)…")
