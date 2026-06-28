@@ -41,6 +41,9 @@ mcp = fastmcp.FastMCP("video-pipeline")
 # ── Singleton caches (populated lazily on first call) ─────────────────────────
 _sam3_predictor = None
 _vp_pipeline: dict = {}   # keyed by (model_path, branch, id_lora)
+_clip_scorer = None      # <-- add
+_dino_scorer = None      # <-- add
+_vlm_judge = None        # <-- add
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
@@ -426,6 +429,111 @@ def union_masks(
     except Exception as e:
         return _err(f"union_masks failed: {e}", e)
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+# T12 — evaluate
+# ─────────────────────────────────────────────────────────────────────────────
+
+@mcp.tool(description=TOOLS["evaluate"]["description"])
+def evaluate(
+    video_path: str,
+    mask_dir: str,
+    replace_prompt: str,
+    object_prompt: str,
+) -> dict:
+    global _clip_scorer, _dino_scorer, _vlm_judge
+    try:
+        _guard("evaluate", {
+            "video_path": video_path,
+            "mask_dir": mask_dir,
+            "replace_prompt": replace_prompt,
+            "object_prompt": object_prompt,
+        })
+
+        # hardcoded config
+        clip_model    = "ViT-B/32"
+        dino_model    = "dinov2_vits14"
+        vlm_model     = "gemini-2.5-flash"
+        sample_every  = 10
+        vlm_keyframes = 8
+        weights       = {"clip": 0.3, "temporal": 0.2, "dino": 0.2, "vlm": 0.3}
+        clip_norm     = {"lo": 0.15, "hi": 0.35}
+
+        import sys
+        sys.path.insert(0, os.path.join(_HERE, "eval"))
+        from metrics.frames import (
+            load_video, load_masks, sample_indices, align_masks_to_frames
+        )
+        from metrics.clip_metrics import ClipScorer
+        from metrics.dino_metrics import DinoScorer
+        from metrics.vlm_judge import GeminiJudge, VlmUnavailable
+
+        # load models once
+        if _clip_scorer is None:
+            print("[evaluate] loading CLIP...")
+            _clip_scorer = ClipScorer(clip_model)
+        if _dino_scorer is None:
+            print("[evaluate] loading DINOv2...")
+            _dino_scorer = DinoScorer(dino_model)
+        if _vlm_judge is None:
+            try:
+                print("[evaluate] loading Gemini VLM judge...")
+                _vlm_judge = GeminiJudge(vlm_model)
+            except VlmUnavailable as e:
+                print(f"[evaluate] VLM judge disabled: {e}")
+
+        # load frames
+        all_frames = load_video(video_path)
+        idx        = sample_indices(len(all_frames), every=sample_every)
+        frames     = [all_frames[i] for i in idx]
+
+        rec = {
+            "clip_score":           None,
+            "temporal_consistency": None,
+            "dino_score":           None,
+            "vlm_judge":            None,
+        }
+
+        # CLIP + temporal
+        cs, tc = _clip_scorer.score(frames, replace_prompt)
+        rec["clip_score"]           = round(cs, 4)
+        rec["temporal_consistency"] = round(tc, 4)
+
+        # DINO
+        masks = align_masks_to_frames(
+            load_masks(mask_dir), idx, len(all_frames))
+        if all(m is None for m in masks):
+            print("[evaluate] no masks found; DINO using full frames")
+        rec["dino_score"] = round(_dino_scorer.score(frames, masks), 4)
+
+        # VLM judge
+        if _vlm_judge is not None:
+            try:
+                rec["vlm_judge"] = _vlm_judge.judge(
+                    all_frames, replace_prompt, vlm_keyframes)
+            except Exception as e:
+                print(f"[evaluate] VLM judge failed: {e}")
+
+        # final score
+        def normalize_clip(raw):
+            return max(0.0, min(1.0, (raw - clip_norm["lo"]) /
+                                     (clip_norm["hi"] - clip_norm["lo"])))
+
+        parts = {}
+        if rec["clip_score"]           is not None: parts["clip"]     = normalize_clip(rec["clip_score"])
+        if rec["temporal_consistency"] is not None: parts["temporal"] = rec["temporal_consistency"]
+        if rec["dino_score"]           is not None: parts["dino"]     = rec["dino_score"]
+        if rec["vlm_judge"] and rec["vlm_judge"].get("overall") is not None:
+            parts["vlm"] = float(rec["vlm_judge"]["overall"]) / 10.0
+
+        wsum = sum(weights[k] for k in parts)
+        rec["final_score"] = round(
+            sum(weights[k] * v for k, v in parts.items()) / wsum, 4
+        ) if wsum > 0 else None
+
+        return _ok(**rec)
+    except Exception as e:
+        return _err(f"evaluate failed: {e}", e)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Entry point

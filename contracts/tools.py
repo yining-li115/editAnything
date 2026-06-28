@@ -255,6 +255,32 @@ TOOLS: dict = {
             "n_frames": {"type": "integer", "description": "Number of mask frames written."},
         },
     },
+
+    # ------------------------------------------------------------------
+    # T12 — evaluate
+    # ------------------------------------------------------------------
+
+    "evaluate": {
+    "description": (
+        "Run all benchmark metrics (CLIP, temporal consistency, DINOv2, "
+        "Gemini VLM judge) on the generated video and return a final blended "
+        "score. Models are cached as singletons across calls."
+    ),
+    "inputs": {
+        "video_path":     {"type": "string", "description": "Absolute path to the generated final.mp4."},
+        "mask_dir":       {"type": "string", "description": "Directory of per-frame roma masks (frame_*.png)."},
+        "replace_prompt": {"type": "string", "description": "Description of the new object (e.g. 'a ripe yellow banana')."},
+        "object_prompt":  {"type": "string", "description": "Source object noun (e.g. 'cup')."},
+    },
+    "outputs": {
+        "clip_score":           {"type": "number", "description": "CLIP cosine similarity (text alignment), ~0.15-0.35."},
+        "temporal_consistency": {"type": "number", "description": "Mean consecutive-frame CLIP cosine similarity, 0-1."},
+        "dino_score":           {"type": "number", "description": "DINOv2 object appearance consistency, 0-1."},
+        "vlm_judge":            {"type": "object", "description": "Gemini VLM scores: style_match, edge_blending, physical_consistency, shadow, overall, comments."},
+        "final_score":          {"type": "number", "description": "Weighted blend: 0.3·CLIP + 0.2·temporal + 0.2·DINO + 0.3·VLM, 0-1."},
+    },
+},
+
 }
 
 

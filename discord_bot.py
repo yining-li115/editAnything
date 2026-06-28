@@ -46,6 +46,24 @@ def find_output_video(result: str) -> str | None:
         return m.group(1)
     return None
 
+def format_eval(scores: dict) -> str:
+    vlm = scores.get("vlm_judge") or {}
+    overall = vlm.get("overall", "N/A")
+    style   = vlm.get("style_match", "N/A")
+    blend   = vlm.get("edge_blending", "N/A")
+    physics = vlm.get("physical_consistency", "N/A")
+    shadow  = vlm.get("shadow", "N/A")
+    return (
+        f"📊 Evaluation:\n"
+        f"  • CLIP score: {scores.get('clip_score', 'N/A')}\n"
+        f"  • Temporal consistency: {scores.get('temporal_consistency', 'N/A')}\n"
+        f"  • DINO score: {scores.get('dino_score', 'N/A')}\n"
+        f"  • VLM judge: {overall}/10 "
+        f"(style: {style}, blending: {blend}, physics: {physics}, shadow: {shadow})\n"
+        f"  • Final score: {scores.get('final_score', 'N/A')}/1.0"
+
+    )
+
 async def process_request(message, prompt: str, video_path: str):
     job_id = str(message.id)
     job_dir = os.path.join(WORKSPACE, "jobs", job_id)
@@ -61,7 +79,7 @@ async def process_request(message, prompt: str, video_path: str):
             f"Frames are at {frames_dir}. "
             f"There are {n_frames} frames total. "
             f"The first frame is at {first_frame}. "
-            f"Use {frames_dir} as source_frames_dir for encoding."
+            f"Use {frames_dir} as source_frames_dir for encoding. "
             f"Only process segment_starts [0, 48] (2 segments for testing). "
             f"Do NOT run rose_removal."
 
@@ -70,18 +88,19 @@ async def process_request(message, prompt: str, video_path: str):
         n_segments = max(1, n_frames // 48)
         await message.channel.send(
             f"🚀 Pipeline running (~{n_segments * 8}-{n_segments * 15} min)...")
-        result = await asyncio.wait_for(
+        result, eval_scores = await asyncio.wait_for(
             asyncio.get_event_loop().run_in_executor(
                 None, run, enriched_prompt
             ),
             timeout=5400
         )
         video_out = find_output_video(result)
+        eval_text = format_eval(eval_scores) if eval_scores else ""
         if video_out:
             size_mb = os.path.getsize(video_out) / 1e6
             if size_mb <= MAX_FILE_MB:
                 await message.channel.send(
-                    "✅ Finished!",
+                    f"✅ Finished!\n{eval_text}",
                     file=discord.File(video_out))
             else:
                 # upload via file.io if too big
@@ -89,7 +108,7 @@ async def process_request(message, prompt: str, video_path: str):
                     ["curl", "-F", f"file=@{video_out}", "https://file.io"],
                     capture_output=True, text=True)
                 link = json.loads(r.stdout).get("link", "lien indisponible")
-                await message.channel.send(f"✅ Finished! Video: {link}")
+                await message.channel.send(f"✅ Finished! Video: {link}\n{eval_text}")
         else:
             await message.channel.send(f"✅ Pipeline finished:\n```{result[:500]}```")
 

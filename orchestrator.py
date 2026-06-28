@@ -93,26 +93,28 @@ SYSTEM_PROMPT = (
     "You are an orchestrator for a video object-replacement pipeline. You have "
     "tools for each pipeline stage (sam3_mask, gemini_edit, roma_edit_mask, "
     "roma_anchors, videopainter_generate, rose_removal, composite, encode, "
-    "union_masks, extract_frames). Call them in the order needed to satisfy the "
+    "union_masks, extract_frames, evaluate). Call them in the order needed to satisfy the "
     "user's request, using each tool's own output paths as inputs to the next "
     "tool — do not invent paths. The usual chain is: sam3_mask (SOURCE mask) + "
     "gemini_edit (ref0) in parallel -> roma_edit_mask (TARGET/edit mask) -> "
-    "roma_anchors -> videopainter_generate -> rose_removal -> composite -> encode. "
+    "roma_anchors -> videopainter_generate -> rose_removal -> composite -> encode "
+    "-> evaluate. "
     "If a tool call fails, inspect the error and either fix the arguments and "
     "retry, or report the failure clearly. When the pipeline is done, report the "
-    "final video path to the user."
+    "final video path and evaluation scores to the user."
     "Compute segment_starts automatically as [0, 48, 96, ...] every 48 frames "
     "up to n_frames, with a tail window so the last 49 frames are always covered. "
 )
 
 
-def run(prompt: str, model: str = DEFAULT_MODEL, max_turns: int = 20) -> str:
+def run(prompt: str, model: str = DEFAULT_MODEL, max_turns: int = 20) -> tuple[str, dict | None]:
     from google.genai import types
 
     client = _client()
     tool = build_tool()
     config = types.GenerateContentConfig(tools=[tool], system_instruction=SYSTEM_PROMPT)
     contents = [types.Content(role="user", parts=[types.Part(text=prompt)])]
+    eval_scores = None
 
     for turn in range(max_turns):
         resp = client.models.generate_content(model=model, contents=contents, config=config)
@@ -123,7 +125,7 @@ def run(prompt: str, model: str = DEFAULT_MODEL, max_turns: int = 20) -> str:
         if not fn_calls:
             text = resp.text or ""
             print(f"[orchestrator] final: {text}")
-            return text
+            return text, eval_scores
 
         response_parts = []
         for fc in fn_calls:
@@ -131,6 +133,8 @@ def run(prompt: str, model: str = DEFAULT_MODEL, max_turns: int = 20) -> str:
             print(f"[orchestrator] turn {turn}: calling {fc.name}({args})")
             result = call_tool(fc.name, args)
             print(f"[orchestrator] -> {result}")
+            if fc.name == "evaluate":
+                eval_scores = result
             response_parts.append(types.Part(function_response=types.FunctionResponse(
                 name=fc.name,
                 response=result if isinstance(result, dict) else {"result": result},
@@ -146,4 +150,7 @@ if __name__ == "__main__":
     ap.add_argument("--model", default=DEFAULT_MODEL)
     ap.add_argument("--max-turns", type=int, default=20)
     args = ap.parse_args()
-    run(args.prompt, model=args.model, max_turns=args.max_turns)
+    result, eval_scores = run(args.prompt, model=args.model, max_turns=args.max_turns)
+    print(result)
+    if eval_scores:
+        print(f"Eval scores: {eval_scores}")
