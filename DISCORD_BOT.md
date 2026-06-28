@@ -21,7 +21,7 @@ cd /workspace/editAnything
 conda activate editanything
 export HF_HOME=/workspace/hf_cache
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
-export VP_OFFLOAD=sequential
+export VP_OFFLOAD=sequential #if on a 48GB VRAM GPU
 python discord_bot.py
 ```
 

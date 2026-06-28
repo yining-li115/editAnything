@@ -360,19 +360,22 @@ def composite(
 def encode(
     frames_dir: str,
     out_path: str,
+    source_frames_dir: str,
+    segment_starts: list,
     out_size: Optional[list] = None,
     fps: int = 25,
-    interpolate: bool = False,
-    anchor_frames: list = [],
+    interpolate: bool = True,
     despike_dir: Optional[str] = None,
 ) -> dict:
     try:
-        _guard("encode", {"frames_dir": frames_dir, "out_path": out_path})
+        _guard("encode", {"frames_dir": frames_dir, "out_path": out_path, "source_frames_dir": source_frames_dir,"segment_starts": segment_starts,})
         from components import extract, encode as enc
 
         if out_size is None:
-            _, native = extract.video_meta(frames_dir)
+            _, native = extract.video_meta(source_frames_dir)
             out_size = list(native)
+
+        anchor_frames = [s + 1 for s in segment_starts if s > 0]
 
         src = frames_dir
         if interpolate and anchor_frames:

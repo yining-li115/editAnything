@@ -101,6 +101,8 @@ SYSTEM_PROMPT = (
     "If a tool call fails, inspect the error and either fix the arguments and "
     "retry, or report the failure clearly. When the pipeline is done, report the "
     "final video path to the user."
+    "Compute segment_starts automatically as [0, 48, 96, ...] every 48 frames "
+    "up to n_frames, with a tail window so the last 49 frames are always covered. "
 )
 
 

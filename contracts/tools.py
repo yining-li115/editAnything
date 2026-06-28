@@ -222,12 +222,13 @@ TOOLS: dict = {
         "inputs": {
             "frames_dir":    {"type": "string",          "description": "Input frames directory."},
             "out_path":      {"type": "string",          "description": "Output .mp4 path."},
+            "source_frames_dir": {"type": "string", "description": "Original input frames directory, used to recover native resolution for encoding.", "default": None},
+            "segment_starts": {"type": "array", "items": {"type": "integer"},
+                                "description": "List of 0-indexed segment start frames."},
             "out_size":      {"type": ["array", "null"], "items": {"type": "integer"},
                                "description": "[W, H] output resolution; null = native.", "default": None},
             "fps":           {"type": "integer",         "description": "Output frame rate.", "default": 25},
             "interpolate":   {"type": "boolean",         "description": "RIFE-despike anchor boundary frames.", "default": False},
-            "anchor_frames": {"type": "array", "items": {"type": "integer"},
-                               "description": "1-indexed boundary frame numbers for RIFE despike.", "default": []},
             "despike_dir":   {"type": ["string", "null"],"description": "Where to write de-spiked frames (required if interpolate=true).", "default": None},
         },
         "outputs": {
