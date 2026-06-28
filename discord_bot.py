@@ -55,11 +55,12 @@ async def process_request(message, prompt: str, video_path: str):
         await message.channel.send("🎞️ Frame extraction...")
         n_frames = extract_frames(video_path, frames_dir)
         await message.channel.send(f"✅ {n_frames} frames extracted")
-
+        first_frame = os.path.join(frames_dir, "frame_00001.png")
         enriched_prompt = (
             f"{prompt}. "
             f"Frames are at {frames_dir}. "
             f"There are {n_frames} frames total. "
+            f"The first frame is at {first_frame}. "
             f"Use {frames_dir} as source_frames_dir for encoding."
             f"Only process segment_starts [0, 48] (2 segments for testing). "
             f"Do NOT run rose_removal."
