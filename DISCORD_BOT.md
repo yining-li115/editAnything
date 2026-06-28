@@ -37,7 +37,7 @@ Go to the server on discord.
 ### With a video attachment
 Type in the chat: 
 ```
-!replace replace the cup with a ripe yellow banana, use segment_starts [0, 48]
+!replace replace the cup with a ripe yellow banana, total frames 97
 ```
 + attach a `.mp4`, `.mov`, `.avi`, or `.mkv` file.
 
@@ -48,20 +48,6 @@ Type in the chat:
 ```
 
 > Google Drive links must be **publicly accessible**.
-
----
-
-## Choosing `segment_starts`
-
-Each segment covers 48 frames. Specify `segment_starts` based on your video length:
-
-| Frames | `segment_starts` |
-|---|---|
-| ~48 | `[0]` |
-| ~96 | `[0, 48]` |
-| ~144 | `[0, 48, 96]` |
-| ~192 | `[0, 48, 96, 144]` |
-| ~240 | `[0, 48, 96, 144, 192]` |
 
 ---
 
@@ -97,10 +83,8 @@ Each segment covers 48 frames. Specify `segment_starts` based on your video leng
 
 **`rose_removal` is disabled** — not configured, the bot explicitly skips it.
 
-**Gemini may choose wrong `segment_starts`** — always specify them explicitly in your prompt until auto-injection is implemented.
-
-###TODO
-**Make concurrent jobs are sequential** — if two users send a request simultaneously, the second one will wait for the first to finish before starting.
+## TODO
+**Make sure that concurrent jobs run sequentially** — if two users send a request simultaneously, the second one will wait for the first to finish before starting.
 
 ---
 

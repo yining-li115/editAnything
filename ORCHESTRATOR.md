@@ -63,6 +63,14 @@ Bump the Inspector's Configuration → Request Timeout above the 10s default —
 GPU-heavy tools (`sam3_mask`, `videopainter_generate`) take much longer than
 that on first call (model load).
 
+## Automatic defaults (no longer need to specify in prompt)
+- **`segment_starts`** — computed automatically from `n_frames` by Gemini 
+  (see system prompt); no need to specify in your prompt.
+- **Output resolution** — always matches the original input frames; no need 
+  to specify `out_size`.
+- **RIFE de-spike** — always enabled at segment boundaries; no need to 
+  specify `interpolate`.
+  
 ## Known limitations
 
 - **`rose_removal` needs its own `rose` conda env**, not yet set up on this

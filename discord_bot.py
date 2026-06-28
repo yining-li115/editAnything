@@ -60,6 +60,8 @@ async def process_request(message, prompt: str, video_path: str):
             f"{prompt}. "
             f"Frames are at {frames_dir}. "
             f"There are {n_frames} frames total. "
+            f"Use {frames_dir} as source_frames_dir for encoding."
+            f"Only process segment_starts [0, 48] (2 segments for testing). "
             f"Do NOT run rose_removal."
 
         )
