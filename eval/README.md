@@ -1,117 +1,86 @@
-# Evaluation
+# Evaluation — FiVE-based benchmark
 
-Scores generated object-replacement videos against the benchmark metrics: three
-no-ground-truth automatic metrics (CLIP score, temporal consistency, DINO score)
-plus a Gemini VLM judge, blended into a final score.
+Scores edited videos on **four editing-specific dimensions** and blends them into a
+final score with **critical-failure caps**. It reuses **FiVE-Bench's real metric
+code** (`FiVE-Bench/evaluation/metrics_calculator.py`) for the automatic metrics and
+a **Gemini judge** for the subjective checklist — replacing the old CLIP-weighted
+blend, which was too CLIP-sensitive and hid obvious failures.
 
-We evaluate the **output** video of each run — `outputs/<name>/final.mp4` —
-using that run's `roma/masks/` for the DINO object crop.
+```
+Final = 0.35·EditSuccess + 0.30·SourcePreservation + 0.20·Temporal + 0.15·RenderingQuality
+        then critical-failure caps (edit_not_completed→≤0.40, source_reappears→≤0.50, …)
+```
 
-## Install
+| Dimension | What feeds it |
+| --- | --- |
+| **Edit Success** | Gemini edit-success checklist (0.7) + CLIP(edited↔target) (0.3) |
+| **Source Preservation** | outside-mask PSNR/SSIM/LPIPS/structure_distance (0.5) + Gemini preservation checklist (0.5) |
+| **Temporal Consistency** | CoTracker Motion-Fidelity-Score (0.5) + Gemini temporal checklist (0.5) |
+| **Rendering Quality** | NIQE (pyiqa) |
+
+Weights, normalization ranges, and caps all live in [`scoring.yaml`](scoring.yaml).
+
+## Two environments (file-based handoff)
+
+- **`editanything`** (torch 2.4 / sam3 / romatch) — only `regen_masks.py` needs it.
+- **`five-bench`** (torch 2.4.1 + torchmetrics + cotracker + pyiqa + google-genai) —
+  everything else. Build per `FiVE-Bench/INSTALL.md`; also `pip install transformers==4.49.0`
+  (torchmetrics CLIPScore breaks on transformers 5.x) and `imageio-ffmpeg`.
+
+External tools are vendored as siblings of this repo (like RIFE/ROSE) and resolved in
+[`paths.py`](paths.py) (env-overridable): `../FiVE-Bench`, `../co-tracker/checkpoints/scaled_offline.pth`.
+
+## Run it (internal 30×3 stress-test)
 
 ```bash
-pip install -r eval/requirements.txt
-export GEMINI_API_KEY=...        # only needed for the VLM judge
+# 1. build the unified case manifest from the results pack (no model re-run)
+python eval/prepare_internal.py            # -> data/internal/cases.jsonl
+
+# 2. edit-region masks. PREFERRED: reuse the pipeline's own outputs/<name>/mask.
+#    Only when those are absent (e.g. the shipped results pack) regenerate them:
+HF_HOME=... /venv/editanything/bin/python eval/regen_masks.py   # SAM3+RoMa, fallback only
+
+# 3. score (four dimensions + caps) — reuses FiVE's MetricsCalculator + Gemini judge
+HF_HOME=... /venv/five-bench/bin/python eval/run_eval.py --mode full   # smoke: --mode smoke --limit 3
+
+# 4. aggregate -> summary.json/csv + failure_gallery.html (by tier, by failure_tag, caps)
+python eval/aggregate_results.py
 ```
 
-## Run it all (one-shot)
+Outputs (gitignored): `data/internal/cases.jsonl`, `outputs/eval_results/*_case_scores.jsonl`
+(+ `cases/*.json`, per-case cached/resumable), `outputs/reports/summary.{json,csv}` + `failure_gallery.html`.
 
-Whole eval over the configs you ran (manifest → metrics → aggregate):
+## Masks: reuse, don't recompute
 
-```bash
-python eval/build_manifest.py --configs eval/configs && \
-python eval/run_eval.py       --manifest eval/manifest.json && \
-python eval/aggregate.py      --results eval/results
-```
-
-Or the full benchmark — generate every config's video, then eval — in one script
-(assumes `eval/configs/` + ref0s exist; run `eval/gen_configs.py` first if not):
-
-```bash
-bash eval/run_benchmark.sh    # run_batch -> manifest -> eval -> aggregate
-```
-
-Both are resumable: `run_eval` caches each `results/<id>.json` and `run_batch`
-skips videos that already have a `final.mp4`. The per-stage docs follow.
-
-## 1. Build the manifest
-
-The manifest maps each output video to its prompts + mask dir. Prompts come from
-the per-case pipeline configs (the pipeline doesn't copy a config into each
-output dir, so point this at the configs you ran):
-
-```bash
-python eval/build_manifest.py --configs eval/configs/*.yaml
-# or a directory of configs:
-python eval/build_manifest.py --configs path/to/case_configs/
-```
-
-This writes `eval/manifest.json`. Each entry:
-
-```json
-{
-  "video_id": "cup2_rose",
-  "object_prompt": "cup",
-  "replace_prompt": "a ripe yellow banana",
-  "full_prompt": "a ripe yellow banana resting on ...",
-  "model": "VideoPainter",
-  "video": "outputs/cup2_rose/final.mp4",
-  "mask_dir": "outputs/cup2_rose/roma/masks"
-}
-```
-
-Edit it freely — `run_eval.py` reads it verbatim. (Cases whose `final.mp4`
-doesn't exist yet are listed as warnings; run the pipeline first.)
-
-## 2. Run the metrics
-
-```bash
-python eval/run_eval.py --manifest eval/manifest.json
-# subset of metrics (e.g. skip the VLM judge):
-python eval/run_eval.py --metrics clip,temporal,dino
-# smoke test on the first 2 cases:
-python eval/run_eval.py --limit 2
-```
-
-Writes one `eval/results/<video_id>.json` per case (the BENCHMARK.md
-"Per Test Case Output" schema). Models load once; finished cases are cached
-(use `--force` to recompute).
-
-## 3. Aggregate
-
-```bash
-python eval/aggregate.py --results eval/results
-```
-
-Writes `eval/summary.md` (the Benchmark Summary Table + averages) and
-`eval/summary.csv`, and prints the table.
+The mask = the region the model was allowed to edit (source∪target, RoMa-warped). The
+pipeline **already produces this at generation time** (`outputs/<name>/mask/`), so
+`prepare_internal.py` points each case's `mask_dir` there and records `mask_source:
+"pipeline"`. `regen_masks.py` is a **fallback** for pre-existing videos whose masks
+weren't kept (the shipped pack excludes them). In the agentic loop, generation just
+made the mask → eval reads it directly, no regeneration.
 
 ## Layout
 
-```
-eval/
-  config.yaml          # sampling params, model ids, final-score weights
-  build_manifest.py    # configs -> manifest.json
-  run_eval.py          # manifest -> per-case results/*.json
-  aggregate.py         # results/*.json -> summary.md + summary.csv
-  metrics/
-    frames.py          # video/frame/mask IO + sampling + mask crop
-    clip_metrics.py    # CLIP score + temporal consistency (shared CLIP model)
-    dino_metrics.py    # DINO score over masked object crops
-    vlm_judge.py       # Gemini judge (current google-genai SDK)
-```
+| Path | Role |
+| --- | --- |
+| `paths.py` | path registry (external deps + data/outputs), env-overridable |
+| `scoring.yaml` | dimension weights, metric normalization, critical-failure caps |
+| `prepare_internal.py` | results pack → unified `cases.jsonl` (tier + failure_tags, mask reuse) |
+| `regen_masks.py` | (fallback) regenerate edit masks via SAM3+RoMa — the only part needing `editanything` |
+| `metrics/five_adapter.py` | wraps FiVE `MetricsCalculator` (Qwen FiVE-Acc stubbed → Gemini); adds NIQE |
+| `metrics/vlm_judge.py` | Gemini structured checklist + critical flags |
+| `metrics/scoring.py` | normalize + combine 4 dims + apply caps |
+| `metrics/frames.py` | video/mask decode + frame sampling |
+| `run_eval.py` | manifest → per-case 4-dim scores |
+| `aggregate_results.py` | scores → summary + by-tier/failure_tag + failure gallery |
+| `prompt_spec.yaml`, `gen_configs.py` | benchmark *authoring* (30×3 spec → per-case configs); not scoring |
 
 ## Notes
 
-- **Final score** = `0.3·CLIP(norm) + 0.2·Temporal + 0.2·DINO + 0.3·VLM(/10)`,
-  weights in `config.yaml`. If a metric is skipped/unavailable, weights are
-  renormalized over the present ones. CLIP raw cosine is small, so it's linearly
-  normalized via `clip_norm.lo/hi` before weighting — tune these on your data.
-- **DINO** crops the object region from `roma/masks/`. If a run has no masks
-  (e.g. `removal=rose` without RoMa masks), it warns and falls back to full
-  frames, which measures whole-scene rather than object consistency.
-- **VLM model** is configurable (`vlm_model` in `config.yaml`); defaults to a
-  current Gemini model via the `google-genai` SDK (BENCHMARK.md's
-  `google.generativeai` + `gemini-1.5-pro` are deprecated). Disabled
-  automatically if no API key is set.
-```
+- **Score is more discriminative than the old blend** (std 0.127→0.183 on the 90 cases)
+  and adds outside-mask preservation + MFS + NIQE + caps, none of which the old eval had.
+- **Known metric caveats:** MFS is weak on near-static scenes (drags Temporal uniformly);
+  NIQE is source-resolution-dependent (penalizes low-res sources). Both are re-tunable in
+  `scoring.yaml`.
+- **`benchmark_source`** in each case labels the *dataset* (`internal` here), not the
+  metric — the metrics are FiVE-Bench's regardless.
