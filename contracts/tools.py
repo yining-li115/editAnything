@@ -152,11 +152,11 @@ TOOLS: dict = {
             "guidance":       {"type": "number",  "description": "Classifier-free guidance scale.", "default": 6.0},
             "seed":           {"type": "integer", "description": "RNG seed for reproducibility.", "default": 42},
             "model_path":     {"type": "string",  "description": "Path to CogVideoX-5b-I2V checkpoint.",
-                                "default": "/usr/prakt/s0033/editAnything/ckpt/CogVideoX-5b-I2V"},
+                                "default": "/workspace/editAnything/ckpt/CogVideoX-5b-I2V"},
             "branch":         {"type": "string",  "description": "Path to VideoPainter branch checkpoint.",
-                                "default": "/usr/prakt/s0033/editAnything/ckpt/VideoPainter/checkpoints/branch"},
+                                "default": "/workspace/editAnything/ckpt/VideoPainter/checkpoints/branch"},
             "id_lora":        {"type": "string",  "description": "Path to VideoPainterID LoRA checkpoint.",
-                                "default": "/usr/prakt/s0033/editAnything/ckpt/VideoPainterID/checkpoints"},
+                                "default": "/workspace/editAnything/ckpt/VideoPainterID/checkpoints"},
             "resume":         {"type": "boolean", "description": "Skip generation if gen_dir already has frames.", "default": False},
         },
         "outputs": {
@@ -261,25 +261,38 @@ TOOLS: dict = {
     # ------------------------------------------------------------------
 
     "evaluate": {
-    "description": (
-        "Run all benchmark metrics (CLIP, temporal consistency, DINOv2, "
-        "Gemini VLM judge) on the generated video and return a final blended "
-        "score. Models are cached as singletons across calls."
-    ),
-    "inputs": {
-        "video_path":     {"type": "string", "description": "Absolute path to the generated final.mp4."},
-        "mask_dir":       {"type": "string", "description": "Directory of per-frame roma masks (frame_*.png)."},
-        "replace_prompt": {"type": "string", "description": "Description of the new object (e.g. 'a ripe yellow banana')."},
-        "object_prompt":  {"type": "string", "description": "Source object noun (e.g. 'cup')."},
+        "description": (
+            "Run the full 4-dimension benchmark (FiVE-Bench PSNR/SSIM/LPIPS/"
+            "structure_distance/CLIP, CoTracker MFS, NIQE, Gemini judge, critical-"
+            "failure caps) on one video via subprocess into the `five-bench` env. "
+            "Defaults to mode='full' (MFS + NIQE on). Requires source_frames_dir "
+            "when enable_mfs=true."
+        ),
+        "inputs": {
+            "case_id":            {"type": "string", "description": "Unique id for this eval run, e.g. the job id."},
+            "source_video_path":  {"type": "string", "description": "Original (pre-edit) video path."},
+            "source_frames_dir":  {"type": ["string", "null"], "description": "Extracted source frames dir, required if enable_mfs=true.", "default": None},
+            "edited_video_path":  {"type": "string", "description": "Final generated video path."},
+            "mask_dir":           {"type": "string", "description": "Per-frame edit-region mask dir."},
+            "target_prompt":      {"type": "string", "description": "Rich description of the new object/scene."},
+            "source_object":      {"type": ["string", "null"], "description": "Source object noun.", "default": None},
+            "target_object":      {"type": ["string", "null"], "description": "Target object description.", "default": None},
+            "edit_instruction":   {"type": ["string", "null"], "description": "e.g. 'Replace the cup with a banana.'", "default": None},
+            "tier":               {"type": ["string", "null"], "description": "easy | medium | hard, if known.", "default": None},
+            "out_dir":            {"type": "string", "description": "Scratch dir for manifest, frames_src staging, and result json."},
+            "mode":               {"type": "string", "description": "smoke | dev | full.", "default": "full"},
+            "enable_mfs":         {"type": "boolean", "description": "CoTracker MFS; needs source_frames_dir and a downloaded co-tracker checkpoint.", "default": True},
+            "enable_niqe":        {"type": "boolean", "description": "pyiqa NIQE.", "default": True},
+        },
+        "outputs": {
+            "final_score":    {"type": ["number", "null"], "description": "Weighted 4-dim score with caps applied, 0-1."},
+            "dimensions":     {"type": "object", "description": "edit_success, source_preservation, temporal_consistency, rendering_quality."},
+            "critical_flags": {"type": "object", "description": "Boolean judge flags."},
+            "caps_applied":   {"type": "array",  "description": "Cap strings that fired."},
+            "raw_metrics":    {"type": "object", "description": "Unnormalized: psnr_unedit, ssim_unedit, lpips_unedit, mse_unedit, structure_distance, clip_target, clip_target_edit, niqe, mfs."},
+            "judge":          {"type": ["object", "null"], "description": "Raw Gemini judge checklist."},
+        },
     },
-    "outputs": {
-        "clip_score":           {"type": "number", "description": "CLIP cosine similarity (text alignment), ~0.15-0.35."},
-        "temporal_consistency": {"type": "number", "description": "Mean consecutive-frame CLIP cosine similarity, 0-1."},
-        "dino_score":           {"type": "number", "description": "DINOv2 object appearance consistency, 0-1."},
-        "vlm_judge":            {"type": "object", "description": "Gemini VLM scores: style_match, edge_blending, physical_consistency, shadow, overall, comments."},
-        "final_score":          {"type": "number", "description": "Weighted blend: 0.3·CLIP + 0.2·temporal + 0.2·DINO + 0.3·VLM, 0-1."},
-    },
-},
 
 }
 

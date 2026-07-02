@@ -93,12 +93,15 @@ def main():
             if use_mfs:
                 # MFS needs a source-frames dir. Reuse the pipeline's own frames_src
                 # (a gen-time intermediate) if present, else the eval cache.
-                pipe_frames = os.path.join(paths.PIPELINE_OUTPUTS, case["name"], "frames_src")
-                src_dir = (pipe_frames if os.path.isdir(pipe_frames)
-                           else os.path.join(args.cache, "frames_src", case["name"]))
+                explicit = case.get("source_frames_dir")
+                if explicit and os.path.isdir(explicit):
+                    src_dir = explicit
+                else:
+                    pipe_frames = os.path.join(paths.PIPELINE_OUTPUTS, case["name"], "frames_src")
+                    src_dir = (pipe_frames if os.path.isdir(pipe_frames)
+                            else os.path.join(args.cache, "frames_src", case["name"]))
                 masks_full = fr.align_masks(mask_all, list(range(n)), (W, H))
-                raw["mfs"] = five.mfs(src_dir, case["edited_video"], masks_full)
-
+                raw["mfs"] = five.mfs(src_dir, case["edited_video"], masks_full) 
             judge_out = None
             if judge is not None:
                 try:

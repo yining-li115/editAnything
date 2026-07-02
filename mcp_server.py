@@ -45,7 +45,6 @@ _clip_scorer = None      # <-- add
 _dino_scorer = None      # <-- add
 _vlm_judge = None        # <-- add
 
-
 # ── helpers ───────────────────────────────────────────────────────────────────
 
 def _abs(p: str) -> str:
@@ -434,106 +433,83 @@ def union_masks(
 # T12 — evaluate
 # ─────────────────────────────────────────────────────────────────────────────
 
+FIVE_BENCH_PYTHON = os.environ.get("FIVE_BENCH_PYTHON", "/venv/five-bench/bin/python")
+
 @mcp.tool(description=TOOLS["evaluate"]["description"])
 def evaluate(
-    video_path: str,
+    case_id: str,
+    source_video_path: str,
+    edited_video_path: str,
     mask_dir: str,
-    replace_prompt: str,
-    object_prompt: str,
+    target_prompt: str,
+    out_dir: str,
+    source_frames_dir: Optional[str] = None,
+    source_object: Optional[str] = None,
+    target_object: Optional[str] = None,
+    edit_instruction: Optional[str] = None,
+    tier: Optional[str] = None,
+    mode: str = "full",
+    enable_mfs: bool = True,
+    enable_niqe: bool = True,
 ) -> dict:
-    global _clip_scorer, _dino_scorer, _vlm_judge
     try:
         _guard("evaluate", {
-            "video_path": video_path,
-            "mask_dir": mask_dir,
-            "replace_prompt": replace_prompt,
-            "object_prompt": object_prompt,
+            "case_id": case_id, "source_video_path": source_video_path,
+            "edited_video_path": edited_video_path, "mask_dir": mask_dir,
+            "target_prompt": target_prompt, "out_dir": out_dir,
         })
+        if enable_mfs and not source_frames_dir:
+            return _err("evaluate: source_frames_dir is required when enable_mfs=true")
 
-        # hardcoded config
-        clip_model    = "ViT-B/32"
-        dino_model    = "dinov2_vits14"
-        vlm_model     = "gemini-2.5-flash"
-        sample_every  = 10
-        vlm_keyframes = 8
-        weights       = {"clip": 0.3, "temporal": 0.2, "dino": 0.2, "vlm": 0.3}
-        clip_norm     = {"lo": 0.15, "hi": 0.35}
+        import json, subprocess
 
-        import sys
-        sys.path.insert(0, os.path.join(_HERE, "eval"))
-        from metrics.frames import (
-            load_video, load_masks, sample_indices, align_masks_to_frames
-        )
-        from metrics.clip_metrics import ClipScorer
-        from metrics.dino_metrics import DinoScorer
-        from metrics.vlm_judge import GeminiJudge, VlmUnavailable
-
-        # load models once
-        if _clip_scorer is None:
-            print("[evaluate] loading CLIP...")
-            _clip_scorer = ClipScorer(clip_model)
-        if _dino_scorer is None:
-            print("[evaluate] loading DINOv2...")
-            _dino_scorer = DinoScorer(dino_model)
-        if _vlm_judge is None:
-            try:
-                print("[evaluate] loading Gemini VLM judge...")
-                _vlm_judge = GeminiJudge(vlm_model)
-            except VlmUnavailable as e:
-                print(f"[evaluate] VLM judge disabled: {e}")
-
-        # load frames
-        all_frames = load_video(video_path)
-        idx        = sample_indices(len(all_frames), every=sample_every)
-        frames     = [all_frames[i] for i in idx]
-
-        rec = {
-            "clip_score":           None,
-            "temporal_consistency": None,
-            "dino_score":           None,
-            "vlm_judge":            None,
+        os.makedirs(out_dir, exist_ok=True)
+        case = {
+            "case_id": case_id,
+            "benchmark_source": "live",
+            "name": case_id,
+            "source_video": _abs(source_video_path),
+            "edited_video": _abs(edited_video_path),
+            "mask_dir": _abs(mask_dir),
+            "source_frames_dir": _abs(source_frames_dir) if source_frames_dir else None,
+            "source_object": source_object,
+            "target_object": target_object,
+            "edit_instruction": edit_instruction or (
+                f"Replace the {source_object} with {target_object}."
+                if source_object and target_object else ""
+            ),
+            "target_prompt": target_prompt,
+            "replacement_transformation_tier": tier,
         }
+        cases_path = os.path.join(out_dir, f"{case_id}_cases.jsonl")
+        out_path   = os.path.join(out_dir, f"{case_id}_scores.jsonl")
+        with open(cases_path, "w") as f:
+            f.write(json.dumps(case) + "\n")
 
-        # CLIP + temporal
-        cs, tc = _clip_scorer.score(frames, replace_prompt)
-        rec["clip_score"]           = round(cs, 4)
-        rec["temporal_consistency"] = round(tc, 4)
+        cmd = [FIVE_BENCH_PYTHON, os.path.join(_HERE, "eval", "run_eval.py"),
+               "--cases", cases_path, "--out", out_path, "--mode", mode, "--force"]
+        if not enable_mfs:
+            cmd.append("--no_mfs")
+        if not enable_niqe:
+            cmd.append("--no_niqe")
 
-        # DINO
-        masks = align_masks_to_frames(
-            load_masks(mask_dir), idx, len(all_frames))
-        if all(m is None for m in masks):
-            print("[evaluate] no masks found; DINO using full frames")
-        rec["dino_score"] = round(_dino_scorer.score(frames, masks), 4)
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
+        if proc.returncode != 0:
+            return _err(f"evaluate subprocess failed: {proc.stderr[-2000:]}")
 
-        # VLM judge
-        if _vlm_judge is not None:
-            try:
-                rec["vlm_judge"] = _vlm_judge.judge(
-                    all_frames, replace_prompt, vlm_keyframes)
-            except Exception as e:
-                print(f"[evaluate] VLM judge failed: {e}")
+        with open(out_path) as f:
+            rec = json.loads(f.readline())
 
-        # final score
-        def normalize_clip(raw):
-            return max(0.0, min(1.0, (raw - clip_norm["lo"]) /
-                                     (clip_norm["hi"] - clip_norm["lo"])))
-
-        parts = {}
-        if rec["clip_score"]           is not None: parts["clip"]     = normalize_clip(rec["clip_score"])
-        if rec["temporal_consistency"] is not None: parts["temporal"] = rec["temporal_consistency"]
-        if rec["dino_score"]           is not None: parts["dino"]     = rec["dino_score"]
-        if rec["vlm_judge"] and rec["vlm_judge"].get("overall") is not None:
-            parts["vlm"] = float(rec["vlm_judge"]["overall"]) / 10.0
-
-        wsum = sum(weights[k] for k in parts)
-        rec["final_score"] = round(
-            sum(weights[k] * v for k, v in parts.items()) / wsum, 4
-        ) if wsum > 0 else None
-
-        return _ok(**rec)
+        return _ok(
+            final_score=rec.get("final_score"),
+            dimensions=rec.get("dimensions"),
+            critical_flags=rec.get("critical_flags"),
+            caps_applied=rec.get("caps_applied"),
+            raw_metrics=rec.get("raw_metrics"),
+            judge=rec.get("judge"),
+        )
     except Exception as e:
-        return _err(f"evaluate failed: {e}", e)
+        return _err(f"evaluate failed: {e}", e) 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Entry point

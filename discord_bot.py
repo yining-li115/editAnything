@@ -47,22 +47,28 @@ def find_output_video(result: str) -> str | None:
     return None
 
 def format_eval(scores: dict) -> str:
-    vlm = scores.get("vlm_judge") or {}
-    overall = vlm.get("overall", "N/A")
-    style   = vlm.get("style_match", "N/A")
-    blend   = vlm.get("edge_blending", "N/A")
-    physics = vlm.get("physical_consistency", "N/A")
-    shadow  = vlm.get("shadow", "N/A")
-    return (
-        f"📊 Evaluation:\n"
-        f"  • CLIP score: {scores.get('clip_score', 'N/A')}\n"
-        f"  • Temporal consistency: {scores.get('temporal_consistency', 'N/A')}\n"
-        f"  • DINO score: {scores.get('dino_score', 'N/A')}\n"
-        f"  • VLM judge: {overall}/10 "
-        f"(style: {style}, blending: {blend}, physics: {physics}, shadow: {shadow})\n"
-        f"  • Final score: {scores.get('final_score', 'N/A')}/1.0"
-
-    )
+    dims  = scores.get("dimensions") or {}
+    raw   = scores.get("raw_metrics") or {}
+    caps  = scores.get("caps_applied") or []
+    flags = {k for k, v in (scores.get("critical_flags") or {}).items() if v}
+    lines = [
+        "📊 Evaluation (full):",
+        f"  • Edit success: {dims.get('edit_success', 'N/A')}",
+        f"  • Source preservation: {dims.get('source_preservation', 'N/A')}",
+        f"  • Temporal consistency: {dims.get('temporal_consistency', 'N/A')}",
+        f"  • Rendering quality: {dims.get('rendering_quality', 'N/A')}",
+        f"  • Final score: {scores.get('final_score', 'N/A')}/1.0",
+        "",
+        "  Raw metrics:",
+        f"    psnr={raw.get('psnr_unedit','N/A')} ssim={raw.get('ssim_unedit','N/A')} "
+        f"lpips={raw.get('lpips_unedit','N/A')} structure_dist={raw.get('structure_distance','N/A')}",
+        f"    clip_target={raw.get('clip_target','N/A')} niqe={raw.get('niqe','N/A')} mfs={raw.get('mfs','N/A')}",
+    ]
+    if flags:
+        lines.append(f"  ⚠️ Critical flags: {', '.join(sorted(flags))}")
+    if caps:
+        lines.append(f"  🔒 Caps applied: {', '.join(caps)}")
+    return "\n".join(lines)
 
 async def process_request(message, prompt: str, video_path: str):
     job_id = str(message.id)
@@ -79,7 +85,9 @@ async def process_request(message, prompt: str, video_path: str):
             f"Frames are at {frames_dir}. "
             f"There are {n_frames} frames total. "
             f"The first frame is at {first_frame}. "
-            f"Use {frames_dir} as source_frames_dir for encoding. "
+            f"Use {frames_dir} as source_frames_dir for both encoding and evaluate. "
+            f"Use {video_path} as source_video_path for evaluate. "
+            f"Use case_id '{job_id}' and out_dir '{job_dir}' for evaluate. "
             f"Only process segment_starts [0, 48] (2 segments for testing). "
             f"Do NOT run rose_removal."
 
