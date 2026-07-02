@@ -1,0 +1,67 @@
+# Scoring config for the rebuilt video-editing benchmark (see design doc §6-§8).
+# Four dimensions, weighted into a final score, then critical-failure caps applied.
+# All weights configurable. Used by scripts/run_eval.py + scripts/aggregate_results.py.
+
+# ---------- dimension weights (must sum to 1.0) ----------
+weights:
+  edit_success: 0.35
+  source_preservation: 0.30
+  temporal_consistency: 0.20
+  rendering_quality: 0.15
+
+# ---------- sub-weights within each dimension ----------
+# Automatic metrics come from FiVE-Bench's MetricsCalculator; VLM parts from the Gemini judge.
+subweights:
+  edit_success:
+    vlm_edit_success: 0.7      # Gemini structured YN/MC-style edit-success judge
+    clip_target: 0.3           # CLIP(edited frame <-> target prompt), normalized
+  source_preservation:
+    outside_mask_visual: 0.5   # blend of outside-mask PSNR/SSIM/(1-LPIPS)/(1-structure_distance)
+    vlm_preservation: 0.5      # Gemini background/identity/camera preservation judge
+  temporal_consistency:
+    mfs: 0.5                   # FiVE Motion Fidelity Score (CoTracker), source vs edited
+    vlm_temporal: 0.5          # Gemini temporal-stability checklist
+  rendering_quality:
+    niqe: 1.0                  # FiVE NIQE (pyiqa), no-reference quality; normalized+inverted
+
+# ---------- metric normalization into [0,1] ----------
+# norm = clamp((raw - lo)/(hi - lo), 0, 1); if invert, use (1 - that).
+# Tune lo/hi on our data after the first full run.
+normalize:
+  clip:                {lo: 15.0, hi: 30.0}          # torchmetrics CLIPScore is 100*cosine (~15-30)
+  psnr:                {lo: 15.0, hi: 40.0}          # dB, outside mask
+  ssim:                {lo: 0.3,  hi: 1.0}
+  lpips:               {lo: 0.0,  hi: 0.6, invert: true}   # lower is better
+  structure_distance:  {lo: 0.0,  hi: 0.10, invert: true}  # DINO self-sim loss, lower better
+  niqe:                {lo: 3.0,  hi: 10.0, invert: true}   # lower is better
+  mfs:                 {lo: 0.0,  hi: 1.0}           # already a 0-1 motion similarity
+
+# blend weights inside source_preservation.outside_mask_visual
+outside_mask_blend:
+  psnr: 0.25
+  ssim: 0.25
+  lpips: 0.25
+  structure_distance: 0.25
+
+# ---------- critical-failure caps (design doc §8) ----------
+# Applied AFTER the weighted final score. Each rule caps final_score at the given value
+# when its flag fires (flags come from the Gemini judge / metric thresholds).
+critical_failure_caps:
+  edit_not_completed: 0.40       # requested edit not done / target object not replaced
+  source_object_reappears: 0.50  # original object reappears in later frames
+  subject_identity_destroyed: 0.50
+  background_camera_changed: 0.60
+  severe_temporal_flicker_temporal_cap: 0.40   # caps the temporal_consistency dim, not final
+
+# ---------- tier-specific caps for the internal stress-test (design doc §8.2) ----------
+tier_caps:
+  medium:
+    silhouette_not_different: {edit_success_cap: 0.50, final_cap: 0.60}
+  hard:
+    material_style_not_visible: {edit_success_zero: true, final_cap: 0.45}
+
+# ---------- frame sampling (FiVE uses stride 8) ----------
+sampling:
+  frame_stride: 8
+  smoke_frames: 6
+  full_max_frames: 49
