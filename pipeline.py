@@ -100,6 +100,8 @@ def main():
     ap.add_argument("--removal", default="none", choices=["none", "rose"],
                     help="rose = ROSE clean-plate removal of the source object + its shadow, "
                          "then composite the new object onto that clean plate (post-processing)")
+    ap.add_argument("--rose_steps", type=int, default=50,
+                    help="ROSE denoise steps (only when removal=rose); lower = faster removal")
     ap.add_argument("--resume", action="store_true", help="reuse existing stage outputs")
     ap.add_argument("--stop_after", default=None,
                     choices=["extract", "mask", "generate", "removal", "composite", "encode"])
@@ -218,7 +220,7 @@ def main():
         from components import removal
         _source_track()
         if not (args.resume and extract.has_frames(rp.clean_frames)):
-            removal.remove(d_frames, rp.mask_src, rp.removal)
+            removal.remove(d_frames, rp.mask_src, rp.removal, steps=args.rose_steps)
         clean_plate = rp.clean_frames
     if args.stop_after == "removal":
         return

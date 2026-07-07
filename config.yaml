@@ -30,16 +30,18 @@ source_mask: track                        # track -> warped (target∪source) se
                                           #   generous seed keeps the new object from dissolving)
                                           # warp  -> legacy: warped seed only (leaks a moving/occluded source)
 region_shape: rect                        # shape of the warped seed: rect (rotated quad) | hull (tight) | bbox
-steps: 50
+steps: 15                                 # denoise steps; 15 holds quality on a 40GB card (10 also ok on static scenes)
 guidance: 6.0
 seed: 42
-offload: sequential                       # VideoPainter VRAM/speed: sequential (~22GB, slow, safe on any card)
-                                          #   | model | none (~44GB, ~2.6x faster, needs an 80GB card running solo)
+offload: model                            # VideoPainter VRAM/speed: model (~35GB, ~2.4x faster than sequential, fits 40GB)
+                                          #   | sequential (~22GB, slow, any card) | none (~44GB, needs 80GB)
                                           # (overrides $VP_OFFLOAD; comment out to fall back to the env var)
 
 # ---------- post-processing / output ----------
 removal: rose                             # rose -> ROSE clean-plate removal of source object + shadow,
                                           #   then composite new object onto it; none -> off
+rose_steps: 25                            # ROSE denoise steps (only when removal=rose); lower = faster
+                                          #   removal (50 -> ~84s denoise; try 25/15/10). Quality: see sweep.
 out_size: 480x832                         # WxH; blank -> native frame size
 fps: 25
 interpolate: true                         # RIFE anchor de-spike (smooth segment boundaries)
