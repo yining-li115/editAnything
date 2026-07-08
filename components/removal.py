@@ -57,13 +57,14 @@ def _encode(frame_paths, out_mp4, *, fps=25, lossless=False):
     return out_mp4
 
 
-def remove(frames_dir, mask_dir, out_dir, *, video_length=None, prompt=""):
+def remove(frames_dir, mask_dir, out_dir, *, video_length=None, prompt="", steps=50):
     """Run ROSE -> clean-plate frames (source object + shadow removed).
 
     frames_dir : source frames frame_*.png
     mask_dir   : per-frame object masks (white = remove; e.g. SAM3 source mask)
     out_dir    : clean-plate frames written to {out_dir}/frames/frame_%05d.png
     video_length: 16n+1; default = largest 16n+1 <= #frames
+    steps      : ROSE denoise steps (default 50; lower = faster, config-tunable).
     Returns the clean-plate frames dir.
     """
     frames = _frame_paths(frames_dir)
@@ -83,8 +84,9 @@ def remove(frames_dir, mask_dir, out_dir, *, video_length=None, prompt=""):
            "--validation_prompts", prompt,
            "--output_dir", os.path.abspath(res_dir),
            "--video_length", str(L),
-           "--sample_size", "480", "720"]
-    print(f"[removal] ROSE on {L} frames (16n+1) — cwd={ROSE_ROOT}")
+           "--sample_size", "480", "720",
+           "--num_inference_steps", str(steps)]
+    print(f"[removal] ROSE on {L} frames (16n+1), steps={steps} — cwd={ROSE_ROOT}")
     subprocess.run(cmd, check=True, cwd=ROSE_ROOT)
     clean_mp4 = os.path.join(res_dir, "example-1.mp4")
     if not os.path.exists(clean_mp4):
@@ -105,6 +107,7 @@ if __name__ == "__main__":
     ap.add_argument("--out_dir", required=True)
     ap.add_argument("--video_length", type=int, default=None, help="16n+1; default auto")
     ap.add_argument("--prompt", default="")
+    ap.add_argument("--steps", type=int, default=50, help="ROSE denoise steps")
     args = ap.parse_args()
     remove(args.frames_dir, args.mask_dir, args.out_dir,
-           video_length=args.video_length, prompt=args.prompt)
+           video_length=args.video_length, prompt=args.prompt, steps=args.steps)
