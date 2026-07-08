@@ -1,17 +1,20 @@
 """Gemini orchestrator: drives the pipeline tools via Gemini function-calling.
-
-Implements roadmap item #2 from README.md — a Gemini agent that parses a chat
-request and calls the wrapped pipeline stages (mcp_server.py) on demand,
-instead of a fixed chain (pipeline.py) or manual clicking (MCP Inspector).
-
-This calls the tool functions directly in-process (no MCP transport) — Gemini's
-function-calling only needs schemas + a way to execute them, both of which
-mcp_server.py + contracts/tools.py already provide.
-
+ 
+videopainter_generate runs on a remote H100 (videopainter_mcp_server.py);
+every other tool runs in-process as before. run() stays SYNCHRONOUS on
+purpose — discord_bot.py calls it via
+`asyncio.get_event_loop().run_in_executor(None, run, prompt)`, which requires
+a plain blocking callable, not a coroutine. Only the one remote call opens
+its own short-lived event loop internally (asyncio.run(), scoped to that
+call) — safe here because run() itself executes in a worker thread (via
+run_in_executor), never on discord.py's own event-loop thread.
+ 
 Setup:
     cp .env.example .env   # set GEMINI_API_KEY (GOOGLE_API_KEY also accepted)
-
-Usage:
+    export H100_HOST=user@h100-ip
+    export VP_SHARED_FS=0   # 0 = no shared storage (rsync), 1 = SLURM shared mount
+ 
+Usage (unchanged from before, and unchanged for discord_bot.py's import):
     python orchestrator.py "replace the cup with a ripe yellow banana, frames in \
 /storage/slurm/sisi/AFM-dataset/cup/frames/cup2, source word 'cup'"
 """
@@ -27,6 +30,7 @@ if _HERE not in sys.path:
 from contracts.tools import TOOLS  # noqa: E402
 import mcp_server as tools_mod      # noqa: E402
 from components.gemini_edit import load_dotenv  # noqa: E402
+from remote_videopainter import videopainter_generate_remote  # noqa: E402
 
 DEFAULT_MODEL = "gemini-2.5-pro"
 
@@ -71,6 +75,14 @@ def build_tool() -> "types.Tool":
 
 
 def call_tool(name: str, args: dict) -> dict:
+    """Still sync — matches the original contract. videopainter_generate is
+    the one exception that needs an event loop, scoped locally so nothing
+    above this function needs to become async."""
+    if name == "videopainter_generate":
+        try:
+            return asyncio.run(videopainter_generate_remote(**args))
+        except Exception as e:
+            return {"error": f"videopainter_generate (remote) raised: {e}"}
     fn = getattr(tools_mod, name, None)
     if fn is None:
         return {"error": f"unknown tool: {name!r}"}
