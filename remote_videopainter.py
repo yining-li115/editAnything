@@ -34,6 +34,7 @@ import uuid
 from fastmcp import Client
 
 H100_HOST = os.environ["H100_HOST"]  # e.g. user@node21 — required, no default on purpose
+H100_PORT = os.environ.get("H100_PORT", "22")
 H100_REMOTE_ROOT = os.environ.get("H100_REMOTE_ROOT", "/workspace/vp_jobs")
 VP_SHARED_FS = os.environ.get("VP_SHARED_FS", "0") == "1"
 VP_SERVER_URL = os.environ.get("VP_SERVER_URL", "http://localhost:8100/sse")
@@ -44,13 +45,14 @@ H100_ID_LORA = os.environ.get("H100_ID_LORA", "ckpt/VideoPainterID/checkpoints")
 
 
 def _rsync_dir(local_dir: str, remote_dir: str, to_remote: bool):
+    ssh_cmd = f"ssh -p {H100_PORT}"  
     if to_remote:
-        subprocess.run(["ssh", H100_HOST, "mkdir", "-p", remote_dir], check=True)
+        subprocess.run(["ssh", "-p", H100_PORT, H100_HOST, "mkdir", "-p", remote_dir], check=True)
         src, dst = f"{local_dir.rstrip('/')}/", f"{H100_HOST}:{remote_dir.rstrip('/')}/"
     else:
         os.makedirs(local_dir, exist_ok=True)
         src, dst = f"{H100_HOST}:{remote_dir.rstrip('/')}/", f"{local_dir.rstrip('/')}/"
-    subprocess.run(["rsync", "-az", src, dst], check=True)
+    subprocess.run(["rsync", "-az", "-e", ssh_cmd, src, dst], check=True)
 
 
 async def videopainter_generate_remote(
