@@ -89,7 +89,6 @@ async def process_request(message, prompt: str, video_path: str):
             f"Use {video_path} as source_video_path for evaluate. "
             f"Use case_id '{job_id}' and out_dir '{job_dir}' for evaluate. "
             f"Only process segment_starts [0, 48] (2 segments for testing). "
-            f"Do NOT run rose_removal."
 
         )
 
