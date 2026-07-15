@@ -224,6 +224,7 @@ isolated, independently-wrappable unit (dependency direction:
 | `components/edit_mask.py`  | per-frame edit region — **generic, cross-candidate** (roma/assets) |
 | `components/anchor.py`     | per-segment clean anchors — **VideoPainter-specific** (roma/assets) |
 | `components/videopainter.py`| VideoPainter multi-chunk reanchor generation (**models loaded once**) |
+| `components/mvinpainter.py` | MVInpainter route — alternative generator, cross-env subprocess (see below) |
 | `components/composite.py`  | feather the object onto a fixed plate (kills chunk-boundary jumps) |
 | `components/encode.py`     | frames → portrait mp4 (+ optional RIFE de-spike)             |
 | `contracts/layout.py`      | run-dir layout + config-driven model registry (ckpt paths)  |
@@ -294,6 +295,7 @@ What's done vs. still open.
 - [x] Decoupled components + `contracts/` registry; VideoPainter & sam3 as git submodules
 - [x] **Source-object shadow removal** — ROSE clean-plate removal (`components/removal.py`, separate `rose` env) + composite the new object onto the clean plate, via `--removal rose` (Role-1 post-processing). Verified on 100 frames.
 - [x] **Irregular-hull edit region** — frame-0 (target∪source) close+dilate hull (not bbox), RoMa-warped per frame (`components/edit_mask.py`); ~0.56× the bbox area, hugs the object.
+- [x] **Second generator candidate — MVInpainter** (`components/mvinpainter.py`, separate `mvinpainter` env, `generator: mvinpainter`; `single`/`dense` modes) + findings that it's a multi-view *image* model, not a dense-video tool (see "MVInpainter route" below). First step of the roadmap's "parallel model candidates".
 
 **Open — quality**
 
@@ -308,3 +310,98 @@ What's done vs. still open.
 - [ ] **Self-correcting retry loop / tuning agent** — auto-pick `dilate`, segment split, mask shape from judge feedback (2–3× retries)
 - [ ] **ROSE removal component** — clean plate, re-enables the original composite path
 - [ ] **Web demo / API** — return video + score + which model was used
+
+## MVInpainter route (second generator — a multi-view *image* model)
+
+`generator: mvinpainter` swaps the VideoPainter generation stage for **MVInpainter**
+(ewrfcas/MVInpainter, NeurIPS 2024), kept as a decoupled candidate (roadmap "parallel
+model candidates"). It consumes the **same inputs** as VideoPainter (per-frame edit
+masks + `ref0`); only the generator differs. Runs in its **own env as a subprocess**,
+exactly like ROSE.
+
+**What it is, and why it's *not* the default (learned the hard way).** MVInpainter is a
+multi-view *image* inpainter, **not a video model**: it inpaints the new object
+consistently across a handful of *wide-baseline views* that share ONE reference — meant
+for **3D reconstruction**, where the output is a *set of views*, not a clip you play.
+For our dense/long/smooth task that breaks three ways:
+- **≤32 frames per pass** — the temporal positional-encoding buffer is fixed at 32
+  (`temporal_position_encoding_max_len`; trained on 8–24). A 240-frame clip *must* be chunked.
+- **No temporal layer → it flickers** as a dense video (measured adjacent-frame diff ≈ 6–7,
+  vs ≈ 1.5 for VideoPainter/CogVideoX which has temporal layers).
+- **Chunks are independent** (they share only `ref0`, no chaining) → the object drifts / pops
+  at chunk boundaries and **deforms at extreme viewpoints** (steep top-down).
+
+It also needs external inputs (a 2D edit of frame 0 = `ref0`, from Gemini; + per-frame masks
+from SAM3+RoMa) — it's an *inpainter*, not end-to-end. **Bottom line: great for "a few
+consistent views of an object for 3D," not a dense/smooth long-video tool.**
+
+### Env (separate `mvinpainter` env + stock repo, like the ROSE env)
+
+```bash
+# 0. clone the repo as a SIBLING of editAnything (kept 100% STOCK — no code edits)
+cd .. && git clone https://github.com/ewrfcas/MVInpainter.git && cd MVInpainter
+
+# 1. env: py3.8 + torch 2.1.2/cu121 + deps + optical-flow stack (RAFT via mmflow/mmcv)
+conda create -n mvinpainter python=3.8 -y && conda activate mvinpainter
+pip install torch==2.1.2 torchvision==0.16.2 torchaudio==2.1.2 --index-url https://download.pytorch.org/whl/cu121
+pip install -r requirements.txt
+mim install mmcv-full && pip install mmflow
+cp ./check_points/mmflow/raft_decoder.py \
+   "$(python -c 'import mmflow,os;print(os.path.dirname(mmflow.__file__))')/models/decoders/"
+
+# 2. weights (HF ewrfcas/MVInpainter) -> check_points/  (we only use O = the insertion model)
+huggingface-cli download ewrfcas/MVInpainter --local-dir check_points/_dl \
+  --include raft_8x2_100k_mixed_368x768.pth mvinpainter_o_512.zip AnimateDiff.zip \
+            models--runwayml--stable-diffusion-inpainting.zip
+mkdir -p check_points/mmflow && cp check_points/_dl/raft_8x2_100k_mixed_368x768.pth check_points/mmflow/
+cd check_points && for z in AnimateDiff mvinpainter_o_512 models--runwayml--stable-diffusion-inpainting; do unzip -qo _dl/$z.zip; done && cd ..
+
+# 3. stub the training-data files the stock code opens at IMPORT (empty = fine for inference;
+#    this keeps the repo stock instead of editing those module-level file reads)
+mkdir -p data/masks/deepfillv2_mask data/masks/coco_mask data/mvimagenet
+: > data/masks/deepfillv2_mask/irregular_mask_list.txt
+: > data/masks/coco_mask/coco_mask_list.txt
+: > data/mvimagenet/mvimgnet_category.txt
+```
+
+`components/mvinpainter.py` invokes this env like ROSE — override via env vars:
+`MVINPAINTER_PYTHON` (default `/venv/mvinpainter/bin/python`), `MVINPAINTER_ROOT`
+(default sibling `../MVInpainter`), `MVINPAINTER_MODEL` (default `check_points/mvinpainter_o_512`).
+
+### Config
+
+```yaml
+generator: mvinpainter   # videopainter (default) | mvinpainter
+mvi_mode: single         # single = ONE wide-baseline group of mvi_nframe views (step-sample
+                         #   -> anchor frames -> sparse mp4; cleanest, no inter-group jitter)
+                         # dense  = interleaved groups tiled to EVERY frame + temporal smooth
+                         #   (full length but flickers)
+mvi_nframe: 24           # frames per group / sampled views (<=32, the model's hard cap)
+# mvi_reference_split:   # (dense) # interleaved groups; blank -> ceil(#frames / mvi_nframe)
+mvi_smooth: true         # (dense) motion-compensated temporal smoothing (cut inter-group flicker)
+```
+Run: `python pipeline.py --config config.yaml --generator mvinpainter --name <run>`.
+
+### How it works (the idea)
+
+- Both routes consume the **same** RoMa edit masks + `ref0` — a clean parallel-candidate swap.
+- Pipeline: **crop** the object band from the masks → **build input scenes** (the group
+  interleaving is done at the INPUT, so the MVInpainter repo stays stock) → **`test_nvs.py`**
+  in the mvinpainter env (subprocess) → **uncrop + feather-composite** the 512² crops back onto
+  the original frames → encode.
+- **`single`** (default): sample `mvi_nframe` frames evenly (step = ⌈#frames/nframe⌉), run them
+  as ONE consistent group → sparse `gen/mvi_anchors.mp4` (e.g. 24 frames @8fps). This is the
+  *cleanest* MVInpainter output and the anchor pool for the hybrid below.
+- **`dense`**: interleave the whole clip into `⌈#frames/nframe⌉` groups (`frames[j::N]`, the
+  authors' long-video grouping), tile back to every frame, then motion-compensated
+  temporal-smooth. Full length, but 10 independent groups → inter-group flicker (smoothing only
+  softens it; adjacent-frame diff ~6.5 → ~3.9).
+
+### Hybrid tried: MVInpainter anchors → VideoPainter fill
+
+Feeding MVInpainter's per-viewpoint frames as VideoPainter's per-chunk anchors (replacing the
+RoMa-warped `ref0`) **fixes the steep top-down** (MVInpainter gives a correct top-down object;
+RoMa only a stretched eye-level warp) and keeps VideoPainter's within-chunk smoothness — **but**
+MVInpainter anchors aren't temporally locked, so VideoPainter faithfully reproduces that wobble
+→ residual boundary pops. **The bottleneck moved to MVInpainter anchor consistency, not the
+chunking.** Prototype (manual anchor injection) in `outputs/cup5_hybrid_*`; not yet a config switch.

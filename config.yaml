@@ -23,6 +23,17 @@ ref0: input/replacement.png               # (roma) frame-0 reference: new object
 # mask_mode: union                        # (assets only) union | source | target
 
 # ---------- generation ----------
+generator: videopainter                   # ROUTE: videopainter (CogVideoX video model, temporally
+                                          #   smooth) | mvinpainter (multi-view image model, separate
+                                          #   env/subprocess; sparse-view consistent but flickers as
+                                          #   dense video). Both consume the same masks + ref0.
+mvi_mode: single                          # (mvinpainter) single = one wide-baseline group of
+                                          #   mvi_nframe views (sparse, cleanest — step sampling
+                                          #   -> anchor frames -> mp4) | dense = interleaved groups
+                                          #   tiled to every frame + temporal smooth (flickers)
+mvi_nframe: 24                            # (mvinpainter) frames per group / sampled views (<=32 cap)
+# mvi_reference_split:                    # (mvinpainter, dense) # groups; blank -> ceil(#frames / mvi_nframe)
+mvi_smooth: true                          # (mvinpainter, dense) motion-compensated temporal smoothing
 # segment_starts: [0, 48]                 # blank -> auto from frame count (every 48 + tail)
 dilate: 12                                # edit-region margin (px), applied to the final mask
 source_mask: track                        # track -> warped (target∪source) seed PLUS per-frame SAM3 source,

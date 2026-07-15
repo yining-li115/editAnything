@@ -83,6 +83,23 @@ def main():
                     help="VideoPainter CPU-offload: sequential (~22GB, slow, default for "
                          "small cards) | model | none (~44GB, fastest, needs 80GB). "
                          "Falls back to $VP_OFFLOAD then 'sequential' if unset.")
+    # generator route: temporally-smooth video model vs multi-view image model
+    ap.add_argument("--generator", default="videopainter", choices=["videopainter", "mvinpainter"],
+                    help="which generation route: 'videopainter' (CogVideoX video model, "
+                         "temporally smooth) or 'mvinpainter' (multi-view image model, "
+                         "cross-env subprocess; sparse-view consistent, flickers as dense video)")
+    ap.add_argument("--mvi_mode", default="single", choices=["single", "dense"],
+                    help="(mvinpainter) single = one wide-baseline group of mvi_nframe views "
+                         "(sparse, cleanest, ANCHORS style) | dense = interleaved groups tiled to "
+                         "every frame + temporal smooth (full length but flickers)")
+    ap.add_argument("--mvi_nframe", type=int, default=24,
+                    help="(mvinpainter) frames per group / sampled views (<=32, model PE cap)")
+    ap.add_argument("--mvi_reference_split", type=int, default=None,
+                    help="(mvinpainter) # interleaved groups; default = ceil(#frames / mvi_nframe)")
+    ap.add_argument("--mvi_smooth", action="store_true", default=True,
+                    help="(mvinpainter) motion-compensated temporal smoothing to cut inter-group flicker")
+    ap.add_argument("--no_mvi_smooth", dest="mvi_smooth", action="store_false",
+                    help="(mvinpainter) disable temporal smoothing")
     # output
     ap.add_argument("--out_root", default=None, help="base dir for outputs (default: repo -> outputs/<name>)")
     ap.add_argument("--out_size", default=None, help="final WxH (default = native frame size)")
@@ -199,15 +216,26 @@ def main():
     if args.stop_after == "mask":
         return
 
-    # 5. generate (load models once, loop segments)
-    _stage(f"generate — VideoPainter ({len(starts)} segment(s): {starts})")
-    if not (args.resume and extract.has_frames(rp.gen_frames)):
-        pipe = videopainter.load_pipeline(args.model_path, args.branch, args.id_lora,
-                                          offload=args.offload)
-        videopainter.generate(pipe, d_frames, d_mask, an.anchor_for_start, rp.gen,
-                              segment_starts=starts, total=CLIP, prompt=args.prompt,
-                              dilate=args.dilate, steps=args.steps, guidance=args.guidance,
-                              seed=args.seed)
+    # 5. generate — VideoPainter (temporally-smooth video model) OR MVInpainter
+    # (multi-view image model, cross-env subprocess). Both consume d_frames + d_mask
+    # (+ ref0) and write full frames to rp.gen/frames.
+    if args.generator == "mvinpainter":
+        _stage("generate — MVInpainter (multi-view route)")
+        if not (args.resume and extract.has_frames(rp.gen_frames)):
+            assert args.ref0, "generator=mvinpainter needs --ref0 (frame-0 reference image)"
+            from components import mvinpainter
+            mvinpainter.generate(d_frames, d_mask, args.ref0, rp.gen, mode=args.mvi_mode,
+                                 nframe=args.mvi_nframe, reference_split=args.mvi_reference_split,
+                                 prompt=args.prompt, smooth=args.mvi_smooth, name=args.name)
+    else:  # videopainter
+        _stage(f"generate — VideoPainter ({len(starts)} segment(s): {starts})")
+        if not (args.resume and extract.has_frames(rp.gen_frames)):
+            pipe = videopainter.load_pipeline(args.model_path, args.branch, args.id_lora,
+                                              offload=args.offload)
+            videopainter.generate(pipe, d_frames, d_mask, an.anchor_for_start, rp.gen,
+                                  segment_starts=starts, total=CLIP, prompt=args.prompt,
+                                  dilate=args.dilate, steps=args.steps, guidance=args.guidance,
+                                  seed=args.seed)
     if args.stop_after == "generate":
         return
 
@@ -243,10 +271,11 @@ def main():
     if args.stop_after == "composite":
         return
 
-    # 7. encode portrait (+ optional RIFE anchor de-spike).
+    # 7. encode portrait (+ optional RIFE anchor de-spike). De-spike targets VideoPainter
+    # segment boundaries — N/A for the mvinpainter route (it smooths internally).
     _stage("encode (+ RIFE de-spike)" if args.interpolate else "encode")
     anchor_frames = [s + 1 for s in starts if s > 0]   # 1-indexed boundary frames
-    if args.interpolate and anchor_frames:
+    if args.interpolate and anchor_frames and args.generator != "mvinpainter":
         src_dir = encode_step.despike_anchors(src_dir, rp.despike, anchor_frames)
     encode_step.encode(src_dir, rp.final, out_size, fps=args.fps)
     print(f"[pipeline] DONE -> {rp.final}")
