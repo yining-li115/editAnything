@@ -25,15 +25,16 @@ ref0: input/replacement.png               # (roma) frame-0 reference: new object
 # ---------- generation ----------
 generator: videopainter                   # ROUTE: videopainter (CogVideoX video model, temporally
                                           #   smooth) | mvinpainter (multi-view image model, separate
-                                          #   env/subprocess; sparse-view consistent but flickers as
-                                          #   dense video). Both consume the same masks + ref0.
-mvi_mode: single                          # (mvinpainter) single = one wide-baseline group of
-                                          #   mvi_nframe views (sparse, cleanest — step sampling
-                                          #   -> anchor frames -> mp4) | dense = interleaved groups
-                                          #   tiled to every frame + temporal smooth (flickers)
-mvi_nframe: 24                            # (mvinpainter) frames per group / sampled views (<=32 cap)
-# mvi_reference_split:                    # (mvinpainter, dense) # groups; blank -> ceil(#frames / mvi_nframe)
-mvi_smooth: true                          # (mvinpainter, dense) motion-compensated temporal smoothing
+                                          #   env/subprocess; per-chunk reanchor fill). Both consume
+                                          #   the same masks + ref0.
+anchor_backend: roma                      # per-chunk anchor source (orthogonal to generator):
+                                          #   roma = warp ref0 (cheap, shears at large views) |
+                                          #   mvinpainter = single-mode pass (clean at all views).
+                                          #   The 2x2: {roma|mvinpainter} x {videopainter|mvinpainter}.
+                                          #   Recommended: roma+videopainter (static/small motion),
+                                          #   mvinpainter+mvinpainter (large viewpoint change).
+mvi_chunk: 20                             # (generator=mvinpainter) consecutive frames per chunk
+mvi_nframe: 24                            # (generator=mvinpainter) sampled anchor views (<=32 PE cap)
 # segment_starts: [0, 48]                 # blank -> auto from frame count (every 48 + tail)
 dilate: 12                                # edit-region margin (px), applied to the final mask
 source_mask: track                        # track -> warped (target∪source) seed PLUS per-frame SAM3 source,

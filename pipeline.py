@@ -88,18 +88,15 @@ def main():
                     help="which generation route: 'videopainter' (CogVideoX video model, "
                          "temporally smooth) or 'mvinpainter' (multi-view image model, "
                          "cross-env subprocess; sparse-view consistent, flickers as dense video)")
-    ap.add_argument("--mvi_mode", default="single", choices=["single", "dense"],
-                    help="(mvinpainter) single = one wide-baseline group of mvi_nframe views "
-                         "(sparse, cleanest, ANCHORS style) | dense = interleaved groups tiled to "
-                         "every frame + temporal smooth (full length but flickers)")
+    ap.add_argument("--anchor_backend", default="roma", choices=["roma", "mvinpainter"],
+                    help="per-chunk anchor source (orthogonal to --generator): roma = warp ref0 "
+                         "(cheap, shears at large views) | mvinpainter = single-mode pass (clean at "
+                         "all views incl top-down). Use mvinpainter for large camera motion.")
+    ap.add_argument("--mvi_chunk", type=int, default=20,
+                    help="(generator=mvinpainter) consecutive frames per reanchor chunk (<=mvi_nframe)")
     ap.add_argument("--mvi_nframe", type=int, default=24,
-                    help="(mvinpainter) frames per group / sampled views (<=32, model PE cap)")
-    ap.add_argument("--mvi_reference_split", type=int, default=None,
-                    help="(mvinpainter) # interleaved groups; default = ceil(#frames / mvi_nframe)")
-    ap.add_argument("--mvi_smooth", action="store_true", default=True,
-                    help="(mvinpainter) motion-compensated temporal smoothing to cut inter-group flicker")
-    ap.add_argument("--no_mvi_smooth", dest="mvi_smooth", action="store_false",
-                    help="(mvinpainter) disable temporal smoothing")
+                    help="(generator=mvinpainter) sampled anchor views for the mvinpainter anchor pass "
+                         "(<=32, model PE cap)")
     # output
     ap.add_argument("--out_root", default=None, help="base dir for outputs (default: repo -> outputs/<name>)")
     ap.add_argument("--out_size", default=None, help="final WxH (default = native frame size)")
@@ -220,13 +217,24 @@ def main():
     # (multi-view image model, cross-env subprocess). Both consume d_frames + d_mask
     # (+ ref0) and write full frames to rp.gen/frames.
     if args.generator == "mvinpainter":
-        _stage("generate — MVInpainter (multi-view route)")
+        _stage(f"generate — MVInpainter (per-chunk reanchor, anchor={args.anchor_backend})")
         if not (args.resume and extract.has_frames(rp.gen_frames)):
             assert args.ref0, "generator=mvinpainter needs --ref0 (frame-0 reference image)"
             from components import mvinpainter
-            mvinpainter.generate(d_frames, d_mask, args.ref0, rp.gen, mode=args.mvi_mode,
-                                 nframe=args.mvi_nframe, reference_split=args.mvi_reference_split,
-                                 prompt=args.prompt, smooth=args.mvi_smooth, name=args.name)
+            # Full-length per-chunk reanchor loop (same shape as the videopainter route), with
+            # MVInpainter as the fill model. anchor_backend picks the per-chunk anchor source:
+            # mvinpainter (clean at all views) or roma (cheap, shears at large views).
+            chunk_starts = list(range(0, n_frames, args.mvi_chunk))
+            if args.anchor_backend == "mvinpainter":
+                man = anchor_mod.get_anchor("mvinpainter", frames_dir=d_frames, ref0_path=args.ref0,
+                                            mask_dir=d_mask, work_dir=rp.gen,
+                                            n_views=args.mvi_nframe, prompt=args.prompt, name=args.name)
+            else:  # roma anchors at the chunk starts
+                man = anchor_mod.get_anchor("roma", frames_dir=d_frames, ref0_path=args.ref0,
+                                            work_dir=rp.roma, segment_starts=chunk_starts)
+            mvinpainter.generate_chunked(d_frames, d_mask, man.anchor_path_for_start, rp.gen,
+                                         segment_starts=chunk_starts, chunk=args.mvi_chunk,
+                                         prompt=args.prompt)
     else:  # videopainter
         _stage(f"generate — VideoPainter ({len(starts)} segment(s): {starts})")
         if not (args.resume and extract.has_frames(rp.gen_frames)):

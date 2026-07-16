@@ -207,6 +207,50 @@ def generate(frames_dir, mask_dir, ref0_path, out_dir, *, nframe=24, mode="singl
     return frames_out
 
 
+def generate_chunked(frames_dir, mask_dir, anchor_path_for_start, out_dir, *,
+                     segment_starts, chunk=20, prompt="", res=512, cfg=7.5, env=None):
+    """Multi-chunk fill with MVInpainter as the per-chunk generator.
+
+    Same shape as videopainter's per-segment reanchor loop, but MVInpainter fills each
+    chunk. Each chunk = `chunk` consecutive frames starting at `start`, generated as ONE
+    single-mode group conditioned on THAT chunk's own anchor (anchor_path_for_start(start)
+    — e.g. a clean MVInpainter single-mode anchor). Narrow within-chunk baseline keeps the
+    object from deforming; per-chunk reanchoring stops it dissolving across the clip.
+
+    anchor_path_for_start: callable start -> path of that chunk's anchor image (full frame).
+    Returns the assembled frames dir {out_dir}/frames.
+    """
+    frames = _frames(frames_dir)
+    n = len(frames)
+    stems = [os.path.basename(f) for f in frames]
+    work = os.path.join(out_dir, "_chunks")
+    final = os.path.join(out_dir, "frames")
+    os.makedirs(final, exist_ok=True)
+    for start in segment_starts:
+        idxs = list(range(start, min(start + chunk, n)))
+        if len(idxs) < 2:
+            continue
+        anchor = anchor_path_for_start(start)
+        cdir = os.path.join(work, f"chunk_{start:05d}")
+        cf, cm = os.path.join(cdir, "frames"), os.path.join(cdir, "masks")
+        os.makedirs(cf, exist_ok=True)
+        os.makedirs(cm, exist_ok=True)
+        for i in idxs:
+            for src, dst in ((os.path.join(frames_dir, stems[i]), os.path.join(cf, stems[i])),
+                             (os.path.join(mask_dir, stems[i]),   os.path.join(cm, stems[i]))):
+                if not os.path.lexists(dst):
+                    os.symlink(os.path.abspath(src), dst)
+        print(f"[mvinpainter] chunk {start}..{idxs[-1]}  anchor={os.path.basename(str(anchor))}", flush=True)
+        fout = generate(cf, cm, str(anchor), cdir, mode="single", nframe=len(idxs),
+                        prompt=prompt, smooth=False, res=res, cfg=cfg,
+                        name=f"chunk_{start:05d}", env=env)
+        for p in sorted(glob.glob(f"{fout}/frame_*.png")):
+            shutil.copy(p, os.path.join(final, os.path.basename(p)))
+    got = len(glob.glob(f"{final}/frame_*.png"))
+    print(f"[mvinpainter] chunked fill -> {final} ({got}/{n} frames)", flush=True)
+    return final
+
+
 if __name__ == "__main__":
     import argparse
     ap = argparse.ArgumentParser(description="MVInpainter generator (cross-env subprocess)")
