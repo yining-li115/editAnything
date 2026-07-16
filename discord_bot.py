@@ -25,11 +25,11 @@ intents = discord.Intents.default()
 intents.message_content = True
 client = discord.Client(intents=intents)
 
-
-def extract_frames(video_path: str, frames_dir: str) -> int:
+def extract_frames(video_path: str, frames_dir: str, max_frames: int = 98) -> int:
     os.makedirs(frames_dir, exist_ok=True)
     subprocess.run([
         "ffmpeg", "-y", "-i", video_path,
+        "-frames:v", str(max_frames),
         "-start_number", "1",
         f"{frames_dir}/frame_%05d.png"
     ], check=True, capture_output=True)
@@ -89,7 +89,7 @@ async def process_request(message, prompt: str, video_path: str):
             f"Use {video_path} as source_video_path for evaluate. "
             f"Use case_id '{job_id}' and out_dir '{job_dir}' for evaluate. "
             f"Only process segment_starts [0, 48] (2 segments for testing). "
-
+            f"DO NOT run ROSE removal. "
         )
 
         n_segments = max(1, n_frames // 48)

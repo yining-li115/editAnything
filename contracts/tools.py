@@ -158,6 +158,7 @@ TOOLS: dict = {
             "id_lora":        {"type": "string",  "description": "Path to VideoPainterID LoRA checkpoint.",
                                 "default": "/workspace/editAnything/ckpt/VideoPainterID/checkpoints"},
             "resume":         {"type": "boolean", "description": "Skip generation if gen_dir already has frames.", "default": False},
+            "steps":          {"type": "integer", "description": "Diffusion inference steps.", "default": 10},
         },
         "outputs": {
             "gen_frames_dir":    {"type": "string",  "description": "Absolute path to generated frames directory."},

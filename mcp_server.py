@@ -250,6 +250,7 @@ def videopainter_generate(
     guidance: float = 6.0,
     seed: int = 42,
     resume: bool = False,
+    steps: int = 10,
 ) -> dict:
     global _vp_pipeline
     global _sam3_predictor

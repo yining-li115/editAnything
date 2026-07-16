@@ -30,7 +30,7 @@ if _HERE not in sys.path:
 from contracts.tools import TOOLS  # noqa: E402
 import mcp_server as tools_mod      # noqa: E402
 from components.gemini_edit import load_dotenv  # noqa: E402
-from remote_videopainter import videopainter_generate_remote  # noqa: E402
+#from remote_videopainter import videopainter_generate_remote  # noqa: E402
 
 DEFAULT_MODEL = "gemini-2.5-pro"
 
@@ -78,11 +78,6 @@ def call_tool(name: str, args: dict) -> dict:
     """Still sync — matches the original contract. videopainter_generate is
     the one exception that needs an event loop, scoped locally so nothing
     above this function needs to become async."""
-    if name == "videopainter_generate":
-        try:
-            return asyncio.run(videopainter_generate_remote(**args))
-        except Exception as e:
-            return {"error": f"videopainter_generate (remote) raised: {e}"}
     fn = getattr(tools_mod, name, None)
     if fn is None:
         return {"error": f"unknown tool: {name!r}"}
