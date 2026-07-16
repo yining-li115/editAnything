@@ -84,8 +84,7 @@ def remove(frames_dir, mask_dir, out_dir, *, video_length=None, prompt="", steps
            "--validation_prompts", prompt,
            "--output_dir", os.path.abspath(res_dir),
            "--video_length", str(L),
-           "--sample_size", "480", "720",
-           "--num_inference_steps", str(steps)]
+           "--sample_size", "480", "720"]
     print(f"[removal] ROSE on {L} frames (16n+1), steps={steps} — cwd={ROSE_ROOT}")
     subprocess.run(cmd, check=True, cwd=ROSE_ROOT)
     clean_mp4 = os.path.join(res_dir, "example-1.mp4")
