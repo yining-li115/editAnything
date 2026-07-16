@@ -246,11 +246,10 @@ def videopainter_generate(
     branch: str,
     id_lora: str,
     dilate: int = 12,
-    steps: int = 50,
+    steps: int = 10,
     guidance: float = 6.0,
     seed: int = 42,
     resume: bool = False,
-    steps: int = 10,
 ) -> dict:
     global _vp_pipeline
     global _sam3_predictor
