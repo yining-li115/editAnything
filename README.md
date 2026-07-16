@@ -222,8 +222,9 @@ isolated, independently-wrappable unit (dependency direction:
 | `components/gemini_edit.py`| Gemini API → in-place frame edit (the new-object reference)  |
 | `components/roma_warp.py`  | low-level RoMa match + warp primitives (shared)              |
 | `components/edit_mask.py`  | per-frame edit region — **generic, cross-candidate** (roma/assets) |
-| `components/anchor.py`     | per-segment clean anchors — **VideoPainter-specific** (roma/assets) |
+| `components/anchor.py`     | per-chunk clean anchors — `roma` / `mvinpainter` / `assets`; consumed by both generators |
 | `components/videopainter.py`| VideoPainter multi-chunk reanchor generation (**models loaded once**) |
+| `components/mvinpainter.py` | MVInpainter route — 2nd generator **and** anchor source, cross-env subprocess (see below) |
 | `components/composite.py`  | feather the object onto a fixed plate (kills chunk-boundary jumps) |
 | `components/encode.py`     | frames → portrait mp4 (+ optional RIFE de-spike)             |
 | `contracts/layout.py`      | run-dir layout + config-driven model registry (ckpt paths)  |
@@ -294,6 +295,7 @@ What's done vs. still open.
 - [x] Decoupled components + `contracts/` registry; VideoPainter & sam3 as git submodules
 - [x] **Source-object shadow removal** — ROSE clean-plate removal (`components/removal.py`, separate `rose` env) + composite the new object onto the clean plate, via `--removal rose` (Role-1 post-processing). Verified on 100 frames.
 - [x] **Irregular-hull edit region** — frame-0 (target∪source) close+dilate hull (not bbox), RoMa-warped per frame (`components/edit_mask.py`); ~0.56× the bbox area, hugs the object.
+- [x] **MVInpainter as a 2nd generator AND anchor source** (`components/mvinpainter.py` + `MVInpainterAnchor` in `components/anchor.py`, separate `mvinpainter` env) — the `anchor_backend × generator` 2×2 (`roma|mvinpainter` × `videopainter|mvinpainter`); the `mvinpainter`+`mvinpainter` cell **removes large-viewpoint deformation** (see "MVInpainter route" below). First step of the roadmap's "parallel model candidates".
 
 **Open — quality**
 
@@ -308,3 +310,120 @@ What's done vs. still open.
 - [ ] **Self-correcting retry loop / tuning agent** — auto-pick `dilate`, segment split, mask shape from judge feedback (2–3× retries)
 - [ ] **ROSE removal component** — clean plate, re-enables the original composite path
 - [ ] **Web demo / API** — return video + score + which model was used
+
+## MVInpainter route (second generator — a multi-view *image* model)
+
+`generator: mvinpainter` swaps the VideoPainter generation stage for **MVInpainter**
+(ewrfcas/MVInpainter, NeurIPS 2024), kept as a decoupled candidate (roadmap "parallel
+model candidates"). It consumes the **same inputs** as VideoPainter (per-frame edit
+masks + `ref0`); only the generator differs. Runs in its **own env as a subprocess**,
+exactly like ROSE.
+
+**What it is (learned the hard way).** MVInpainter is a multi-view *image* inpainter,
+**not a video model**: it inpaints the new object consistently across a handful of
+*wide-baseline views* that share ONE reference — built for **3D reconstruction** (the
+output is a *set of views*, not a clip you play). Two hard limits shape how we use it:
+- **≤32 frames per pass** — the temporal positional-encoding buffer is fixed at 32
+  (`temporal_position_encoding_max_len`; trained on 8–24). A long clip *must* be chunked.
+- **No temporal layer** — adjacent frames aren't temporally locked, so a naïve dense video
+  flickers (adjacent-frame diff ≈ 6–7, vs ≈ 1.5 for VideoPainter/CogVideoX).
+
+But its multi-view strength is exactly what a **single frontal `ref0` can't give you**: a
+*correct* object at a steep top-down view (RoMa can only 2D-warp the frontal ref → it shears
+into a smear). We exploit this on **two axes** (the 2×2 below): MVInpainter as a **generator**
+(per-chunk reanchor fill) and as an **anchor source** (a clean per-viewpoint anchor for
+*either* generator). It still needs external inputs (`ref0` from Gemini + per-frame edit masks
+from SAM3+RoMa) — it's an *inpainter*, not end-to-end.
+
+### Env (separate `mvinpainter` env + stock repo, like the ROSE env)
+
+```bash
+# 0. clone the repo as a SIBLING of editAnything (kept 100% STOCK — no code edits)
+cd .. && git clone https://github.com/ewrfcas/MVInpainter.git && cd MVInpainter
+
+# 1. env: py3.8 + torch 2.1.2/cu121 + deps + optical-flow stack (RAFT via mmflow/mmcv)
+conda create -n mvinpainter python=3.8 -y && conda activate mvinpainter
+pip install torch==2.1.2 torchvision==0.16.2 torchaudio==2.1.2 --index-url https://download.pytorch.org/whl/cu121
+pip install -r requirements.txt
+mim install mmcv-full && pip install mmflow
+cp ./check_points/mmflow/raft_decoder.py \
+   "$(python -c 'import mmflow,os;print(os.path.dirname(mmflow.__file__))')/models/decoders/"
+
+# 2. weights (HF ewrfcas/MVInpainter) -> check_points/  (we only use O = the insertion model)
+huggingface-cli download ewrfcas/MVInpainter --local-dir check_points/_dl \
+  --include raft_8x2_100k_mixed_368x768.pth mvinpainter_o_512.zip AnimateDiff.zip \
+            models--runwayml--stable-diffusion-inpainting.zip
+mkdir -p check_points/mmflow && cp check_points/_dl/raft_8x2_100k_mixed_368x768.pth check_points/mmflow/
+cd check_points && for z in AnimateDiff mvinpainter_o_512 models--runwayml--stable-diffusion-inpainting; do unzip -qo _dl/$z.zip; done && cd ..
+
+# 3. stub the training-data files the stock code opens at IMPORT (empty = fine for inference;
+#    this keeps the repo stock instead of editing those module-level file reads)
+mkdir -p data/masks/deepfillv2_mask data/masks/coco_mask data/mvimagenet
+: > data/masks/deepfillv2_mask/irregular_mask_list.txt
+: > data/masks/coco_mask/coco_mask_list.txt
+: > data/mvimagenet/mvimgnet_category.txt
+```
+
+`components/mvinpainter.py` invokes this env like ROSE — override via env vars:
+`MVINPAINTER_PYTHON` (default `/venv/mvinpainter/bin/python`), `MVINPAINTER_ROOT`
+(default sibling `../MVInpainter`), `MVINPAINTER_MODEL` (default `check_points/mvinpainter_o_512`).
+
+### Config — the anchor × generator 2×2
+
+Two orthogonal knobs (both routes share the same RoMa edit masks + `ref0`):
+
+```yaml
+generator:      videopainter   # videopainter (CogVideoX, temporally smooth) | mvinpainter
+anchor_backend: roma           # roma (warp ref0 — cheap, shears at large views) | mvinpainter
+                               #   (single-mode pass — clean at ALL views incl. top-down)
+mvi_chunk:      20             # (generator=mvinpainter) consecutive frames per reanchor chunk
+mvi_nframe:     24             # (generator=mvinpainter) sampled anchor views (<=32 PE cap)
+```
+
+|                         | generator: **videopainter**       | generator: **mvinpainter**            |
+| ----------------------- | --------------------------------- | ------------------------------------- |
+| anchor: **roma**        | default — static / small motion   | roma anchors shear → not recommended  |
+| anchor: **mvinpainter** | hybrid (below) — not pursued      | **large viewpoint change** ✅          |
+
+Run (large-motion route):
+`python pipeline.py --config config.yaml --generator mvinpainter --anchor_backend mvinpainter --name <run>`.
+
+### How it works
+
+Both generators run the **same per-chunk reanchor loop** (`pipeline.py`): the clip is split into
+chunks and each chunk is generated conditioned on **its own anchor** (`anchor_for_start`), so the
+object never drifts across the clip. The two axes:
+
+- **`anchor_backend`** (`components/anchor.py`):
+  - `roma` — `RomaAnchor`: warp `ref0` to each chunk start. Cheap, but a 2D warp of a frontal ref
+    *shears* under large view change (a table-plane homography applied to a 3-D object).
+  - `mvinpainter` — `MVInpainterAnchor`: one wide-baseline **single-mode** MVInpainter pass over
+    `mvi_nframe` evenly-sampled views → clean generated anchors at *every* viewpoint (incl.
+    top-down); `anchor_for_start(s)` returns the nearest. Reuses `generate(mode="single")`.
+- **`generator`**:
+  - `videopainter` — CogVideoX I2V per-segment fill (49-frame segments, temporally smooth).
+  - `mvinpainter` — `generate_chunked`: one MVInpainter fill per `mvi_chunk`-frame chunk. The object
+    band is cropped (keeps aspect / size), scenes are built at the INPUT (repo stays stock),
+    `test_nvs.py` runs in the mvinpainter env (subprocess), then uncrop + feather-composite back
+    onto the original frames.
+
+**Result (cup→apple, 240-frame moving-camera clip):** `mvinpainter` anchors + `mvinpainter` fill
+**removes the large-view deformation entirely** (a proper apple at every angle incl. top-down),
+where both `roma` anchors and a global-`ref0` dense pass smear from ~frame 60. Within-chunk
+adjacent-frame diff ≈ 3.3; the **remaining artifact is a pop at each chunk boundary** (≈ 11.6,
+i.e. every `mvi_chunk` frames), since chunks are generated independently. Reducing it (chunk
+overlap + blend, or temporal smoothing) is the open follow-up.
+
+The internal `generate(mode="single"|"dense")` passes remain as library calls — `single` is what
+the `mvinpainter` anchor backend uses; `dense` (interleaved groups tiled to every frame + temporal
+smooth) is the older full-length route, kept for comparison and superseded by the reanchor fill above.
+
+### Hybrid (mvinpainter anchors → VideoPainter fill) — not pursued
+
+The top-right cell of the 2×2: feed `MVInpainterAnchor` anchors to the **VideoPainter** fill
+(`--generator videopainter --anchor_backend mvinpainter`). It fixes the steep top-down (a correct
+top-down object vs RoMa's stretched eye-level warp) and keeps VideoPainter's within-chunk
+smoothness — **but** the MVInpainter anchors aren't temporally locked, so VideoPainter reproduces
+that wobble → residual boundary pops; the bottleneck is the same anchor consistency. We ship
+`mvinpainter`+`mvinpainter` instead; this cell stays mechanically expressible (the two knobs are
+orthogonal) but is not tuned. Earlier manual-injection prototype: `outputs/cup5_hybrid_*`.

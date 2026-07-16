@@ -83,6 +83,20 @@ def main():
                     help="VideoPainter CPU-offload: sequential (~22GB, slow, default for "
                          "small cards) | model | none (~44GB, fastest, needs 80GB). "
                          "Falls back to $VP_OFFLOAD then 'sequential' if unset.")
+    # generator route: temporally-smooth video model vs multi-view image model
+    ap.add_argument("--generator", default="videopainter", choices=["videopainter", "mvinpainter"],
+                    help="which generation route: 'videopainter' (CogVideoX video model, "
+                         "temporally smooth) or 'mvinpainter' (multi-view image model, "
+                         "cross-env subprocess; sparse-view consistent, flickers as dense video)")
+    ap.add_argument("--anchor_backend", default="roma", choices=["roma", "mvinpainter"],
+                    help="per-chunk anchor source (orthogonal to --generator): roma = warp ref0 "
+                         "(cheap, shears at large views) | mvinpainter = single-mode pass (clean at "
+                         "all views incl top-down). Use mvinpainter for large camera motion.")
+    ap.add_argument("--mvi_chunk", type=int, default=20,
+                    help="(generator=mvinpainter) consecutive frames per reanchor chunk (<=mvi_nframe)")
+    ap.add_argument("--mvi_nframe", type=int, default=24,
+                    help="(generator=mvinpainter) sampled anchor views for the mvinpainter anchor pass "
+                         "(<=32, model PE cap)")
     # output
     ap.add_argument("--out_root", default=None, help="base dir for outputs (default: repo -> outputs/<name>)")
     ap.add_argument("--out_size", default=None, help="final WxH (default = native frame size)")
@@ -199,15 +213,37 @@ def main():
     if args.stop_after == "mask":
         return
 
-    # 5. generate (load models once, loop segments)
-    _stage(f"generate — VideoPainter ({len(starts)} segment(s): {starts})")
-    if not (args.resume and extract.has_frames(rp.gen_frames)):
-        pipe = videopainter.load_pipeline(args.model_path, args.branch, args.id_lora,
-                                          offload=args.offload)
-        videopainter.generate(pipe, d_frames, d_mask, an.anchor_for_start, rp.gen,
-                              segment_starts=starts, total=CLIP, prompt=args.prompt,
-                              dilate=args.dilate, steps=args.steps, guidance=args.guidance,
-                              seed=args.seed)
+    # 5. generate — VideoPainter (temporally-smooth video model) OR MVInpainter
+    # (multi-view image model, cross-env subprocess). Both consume d_frames + d_mask
+    # (+ ref0) and write full frames to rp.gen/frames.
+    if args.generator == "mvinpainter":
+        _stage(f"generate — MVInpainter (per-chunk reanchor, anchor={args.anchor_backend})")
+        if not (args.resume and extract.has_frames(rp.gen_frames)):
+            assert args.ref0, "generator=mvinpainter needs --ref0 (frame-0 reference image)"
+            from components import mvinpainter
+            # Full-length per-chunk reanchor loop (same shape as the videopainter route), with
+            # MVInpainter as the fill model. anchor_backend picks the per-chunk anchor source:
+            # mvinpainter (clean at all views) or roma (cheap, shears at large views).
+            chunk_starts = list(range(0, n_frames, args.mvi_chunk))
+            if args.anchor_backend == "mvinpainter":
+                man = anchor_mod.get_anchor("mvinpainter", frames_dir=d_frames, ref0_path=args.ref0,
+                                            mask_dir=d_mask, work_dir=rp.gen,
+                                            n_views=args.mvi_nframe, prompt=args.prompt, name=args.name)
+            else:  # roma anchors at the chunk starts
+                man = anchor_mod.get_anchor("roma", frames_dir=d_frames, ref0_path=args.ref0,
+                                            work_dir=rp.roma, segment_starts=chunk_starts)
+            mvinpainter.generate_chunked(d_frames, d_mask, man.anchor_path_for_start, rp.gen,
+                                         segment_starts=chunk_starts, chunk=args.mvi_chunk,
+                                         prompt=args.prompt)
+    else:  # videopainter
+        _stage(f"generate — VideoPainter ({len(starts)} segment(s): {starts})")
+        if not (args.resume and extract.has_frames(rp.gen_frames)):
+            pipe = videopainter.load_pipeline(args.model_path, args.branch, args.id_lora,
+                                              offload=args.offload)
+            videopainter.generate(pipe, d_frames, d_mask, an.anchor_for_start, rp.gen,
+                                  segment_starts=starts, total=CLIP, prompt=args.prompt,
+                                  dilate=args.dilate, steps=args.steps, guidance=args.guidance,
+                                  seed=args.seed)
     if args.stop_after == "generate":
         return
 
@@ -243,10 +279,11 @@ def main():
     if args.stop_after == "composite":
         return
 
-    # 7. encode portrait (+ optional RIFE anchor de-spike).
+    # 7. encode portrait (+ optional RIFE anchor de-spike). De-spike targets VideoPainter
+    # segment boundaries — N/A for the mvinpainter route (it smooths internally).
     _stage("encode (+ RIFE de-spike)" if args.interpolate else "encode")
     anchor_frames = [s + 1 for s in starts if s > 0]   # 1-indexed boundary frames
-    if args.interpolate and anchor_frames:
+    if args.interpolate and anchor_frames and args.generator != "mvinpainter":
         src_dir = encode_step.despike_anchors(src_dir, rp.despike, anchor_frames)
     encode_step.encode(src_dir, rp.final, out_size, fps=args.fps)
     print(f"[pipeline] DONE -> {rp.final}")

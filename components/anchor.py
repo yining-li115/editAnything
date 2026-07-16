@@ -79,11 +79,61 @@ class RomaAnchor:
 
     def anchor_for_start(self, start):
         from PIL import Image
+        return Image.open(self.anchor_path_for_start(start)).convert("RGB")
+
+    def anchor_path_for_start(self, start):
         self.prepare()
         p = self._path(start)
         if not os.path.exists(p):
             raise FileNotFoundError(f"RoMa anchor missing for start={start}: {p}")
-        return Image.open(p).convert("RGB")
+        return p
+
+
+class MVInpainterAnchor:
+    """Per-chunk anchors via a MVInpainter single-mode pass (clean at ALL viewpoints,
+    incl. steep top-down — unlike RoMa's 2D warp of ref0, which shears large views).
+
+    Runs ONE wide-baseline single-mode group over `n_views` evenly-sampled frames -> a
+    sparse set of GENERATED anchors (cached); anchor_path_for_start(s) returns the
+    sampled anchor nearest frame s. Same interface as RomaAnchor, so any generator's
+    per-chunk loop can consume it (the MVInpainter-anchor axis of the anchor×generator
+    matrix). Reuses components.mvinpainter.generate() UNCHANGED for the pass."""
+
+    def __init__(self, frames_dir, ref0_path, mask_dir, work_dir, *,
+                 n_views=24, prompt="", name="mvi_anchor"):
+        self.frames_dir = frames_dir
+        self.ref0_path = ref0_path
+        self.mask_dir = mask_dir
+        self.work_dir = work_dir
+        self.n_views = n_views
+        self.prompt = prompt
+        self.name = name
+        self.run_dir = os.path.join(work_dir, "mvi_anchor_run")
+        self._map = None                     # sampled frame index -> anchor path
+
+    def prepare(self):
+        if self._map is not None:
+            return
+        frames_out = os.path.join(self.run_dir, "frames")
+        if not glob.glob(f"{frames_out}/frame_*.png"):
+            from components import mvinpainter
+            mvinpainter.generate(self.frames_dir, self.mask_dir, self.ref0_path, self.run_dir,
+                                 mode="single", nframe=self.n_views, prompt=self.prompt,
+                                 smooth=False, name=self.name)
+        self._map = {int(os.path.basename(p).split("_")[1].split(".")[0]): p
+                     for p in sorted(glob.glob(f"{frames_out}/frame_*.png"))}
+        if not self._map:
+            raise FileNotFoundError(f"MVInpainter anchor pass produced no frames in {frames_out}")
+        print(f"[anchor] MVInpainter anchors: {len(self._map)} views at "
+              f"{sorted(self._map)[:3]}..{sorted(self._map)[-1]}")
+
+    def anchor_path_for_start(self, start):
+        self.prepare()
+        return self._map[min(self._map, key=lambda k: abs(k - start))]   # nearest sampled view
+
+    def anchor_for_start(self, start):
+        from PIL import Image
+        return Image.open(self.anchor_path_for_start(start)).convert("RGB")
 
 
 def get_anchor(backend, **kw):
@@ -92,4 +142,8 @@ def get_anchor(backend, **kw):
     if backend == "roma":
         return RomaAnchor(kw["frames_dir"], kw["ref0_path"], kw["work_dir"], kw["segment_starts"],
                           device=kw.get("device", "cuda"))
+    if backend == "mvinpainter":
+        return MVInpainterAnchor(kw["frames_dir"], kw["ref0_path"], kw["mask_dir"], kw["work_dir"],
+                                 n_views=kw.get("n_views", 24), prompt=kw.get("prompt", ""),
+                                 name=kw.get("name", "mvi_anchor"))
     raise ValueError(f"unknown anchor backend: {backend!r}")
