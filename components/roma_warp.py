@@ -13,6 +13,7 @@ k == 0 is the identity warp (handled by the caller).
 Uses romatch (install --no-deps to keep torch 2.4; use_custom_corr=False -> pure
 PyTorch local-correlation, no CUDA extension build).
 """
+import os
 import contextlib
 import numpy as np
 import cv2
@@ -26,7 +27,12 @@ def load_roma(device="cuda"):
     global _roma
     if _roma is None:
         from romatch import roma_outdoor
-        _roma = roma_outdoor(device=device, use_custom_corr=False)
+        # Lower res = faster matching. Defaults 560/864; 448/560 is ~1.5-2x faster with
+        # negligible impact on the coarse/dilated edit mask. Env-tunable; must be /14.
+        coarse = int(os.environ.get("ROMA_COARSE_RES", "448"))
+        upsample = int(os.environ.get("ROMA_UPSAMPLE_RES", "560"))
+        _roma = roma_outdoor(device=device, coarse_res=coarse, upsample_res=upsample,
+                             use_custom_corr=False)
     return _roma
 
 
@@ -58,7 +64,7 @@ def match(f0_path, fk_path, device="cuda"):
     with torch.autocast("cuda", enabled=False):
         warp, _ = roma.match(f0_path, fk_path, device=device)
     S = warp.shape[1]
-    gridA = warp[0][:, S:, 2:].unsqueeze(0).to(device)     # A-coords per B pixel
+    gridA = warp[0][:, S:, :2].unsqueeze(0).to(device)     # A-coords per B pixel (was 2:, the B/identity coords -> static warp bug)
     return gridA, S
 
 

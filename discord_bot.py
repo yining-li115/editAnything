@@ -9,6 +9,7 @@ import re
 import subprocess
 import sys
 import json
+import functools
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _HERE)
@@ -75,6 +76,27 @@ async def process_request(message, prompt: str, video_path: str):
     job_dir = os.path.join(WORKSPACE, "jobs", job_id)
     frames_dir = os.path.join(job_dir, "frames")
 
+    loop = asyncio.get_event_loop()
+    sent_video = {"done": False}
+
+    async def _send_video(video_out):
+        if not video_out or not os.path.exists(video_out):
+            return
+        if os.path.getsize(video_out) / 1e6 <= MAX_FILE_MB:
+            await message.channel.send("✅ Video ready!", file=discord.File(video_out))
+        else:
+            r = subprocess.run(["curl", "-F", f"file=@{video_out}", "https://file.io"],
+                               capture_output=True, text=True)
+            link = json.loads(r.stdout).get("link", "lien indisponible")
+            await message.channel.send(f"✅ Video ready! {link}")
+
+    def on_video(video_out):   # fired from the worker thread the instant encode finishes
+        sent_video["done"] = True
+        try:
+            asyncio.run_coroutine_threadsafe(_send_video(video_out), loop).result(timeout=180)
+        except Exception as e:
+            print(f"[bot] video send failed: {e}")
+
     try:
         await message.channel.send("🎞️ Frame extraction...")
         n_frames = extract_frames(video_path, frames_dir)
@@ -96,28 +118,23 @@ async def process_request(message, prompt: str, video_path: str):
         await message.channel.send(
             f"🚀 Pipeline running (~{n_segments * 8}-{n_segments * 15} min)...")
         result, eval_scores = await asyncio.wait_for(
-            asyncio.get_event_loop().run_in_executor(
-                None, run, enriched_prompt
+            loop.run_in_executor(
+                None, functools.partial(run, enriched_prompt, on_video=on_video)
             ),
             timeout=5400
         )
-        video_out = find_output_video(result)
-        eval_text = format_eval(eval_scores) if eval_scores else ""
-        if video_out:
-            size_mb = os.path.getsize(video_out) / 1e6
-            if size_mb <= MAX_FILE_MB:
-                await message.channel.send(
-                    f"✅ Finished!\n{eval_text}",
-                    file=discord.File(video_out))
+        # the video was already sent by on_video the moment encode finished; fallback if not
+        if not sent_video["done"]:
+            vo = find_output_video(result)
+            if vo:
+                await _send_video(vo)
             else:
-                # upload via file.io if too big
-                r = subprocess.run(
-                    ["curl", "-F", f"file=@{video_out}", "https://file.io"],
-                    capture_output=True, text=True)
-                link = json.loads(r.stdout).get("link", "lien indisponible")
-                await message.channel.send(f"✅ Finished! Video: {link}\n{eval_text}")
+                await message.channel.send(f"✅ Pipeline finished:\n```{result[:500]}```")
+        # evaluation as a SEPARATE follow-up message, once it's ready
+        if eval_scores:
+            await message.channel.send(f"📊 {format_eval(eval_scores)}")
         else:
-            await message.channel.send(f"✅ Pipeline finished:\n```{result[:500]}```")
+            await message.channel.send("📊 Evaluation unavailable (no scores).")
 
     except asyncio.TimeoutError:
         await message.channel.send("❌ Pipeline timed out after 90 minutes.")

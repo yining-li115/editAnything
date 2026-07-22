@@ -21,6 +21,8 @@ Usage (unchanged from before, and unchanged for discord_bot.py's import):
 from __future__ import annotations
 import os
 import sys
+import time
+import asyncio
 import argparse
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -33,6 +35,10 @@ from components.gemini_edit import load_dotenv  # noqa: E402
 from remote_videopainter import videopainter_generate_remote  # noqa: E402
 
 DEFAULT_MODEL = "gemini-2.5-pro"
+
+# ROSE removal (source shadow/reflection cleanup) is slow + VRAM-heavy. Disabled by
+# default so it's never even offered to Gemini; set DISABLE_ROSE=0 to re-enable it.
+DISABLE_ROSE = os.environ.get("DISABLE_ROSE", "1") == "1"
 
 _TYPE_MAP = {
     "string": "STRING", "integer": "INTEGER", "number": "NUMBER",
@@ -61,6 +67,8 @@ def build_tool() -> "types.Tool":
     from google.genai import types
     declarations = []
     for name, tool_spec in TOOLS.items():
+        if DISABLE_ROSE and name == "rose_removal":
+            continue  # not exposed to Gemini -> it cannot call ROSE at all
         properties, required = {}, []
         for pname, pspec in tool_spec["inputs"].items():
             properties[pname] = _json_schema_to_gemini(pspec)
@@ -92,6 +100,27 @@ def call_tool(name: str, args: dict) -> dict:
         return {"error": f"{name} raised: {e}"}
 
 
+def _job_dir(args: dict):
+    """Derive jobs/<id>/ from any path arg so timing lands next to the run's outputs."""
+    for v in args.values():
+        if isinstance(v, str) and "/jobs/" in v:
+            head, tail = v.split("/jobs/", 1)
+            return os.path.join(head, "jobs", tail.split("/", 1)[0])
+    return None
+
+
+def _log_timing(args: dict, name: str, begin: str, dt: float):
+    """Append one clean timing line (times only) to jobs/<id>/timing.log."""
+    jd = _job_dir(args)
+    if not jd:
+        return
+    try:
+        with open(os.path.join(jd, "timing.log"), "a") as fh:
+            fh.write(f"{begin}  {name:<22} {dt:8.1f}s\n")
+    except OSError:
+        pass
+
+
 def _client(api_key=None):
     from google import genai
     load_dotenv()
@@ -121,10 +150,12 @@ SYSTEM_PROMPT = (
     "final video path and evaluation scores to the user."
     "Compute segment_starts automatically as [0, 48, 96, ...] every 48 frames "
     "up to n_frames, with a tail window so the last 49 frames are always covered. "
+    + ("ROSE removal is DISABLED — the rose_removal tool is unavailable, do not attempt it. "
+       "For composite, use the ORIGINAL frames (frames_dir) as bg_frames_dir. " if DISABLE_ROSE else "")
 )
 
 
-def run(prompt: str, model: str = DEFAULT_MODEL, max_turns: int = 20) -> tuple[str, dict | None]:
+def run(prompt: str, model: str = DEFAULT_MODEL, max_turns: int = 20, on_video=None) -> tuple[str, dict | None]:
     from google.genai import types
 
     client = _client()
@@ -147,9 +178,17 @@ def run(prompt: str, model: str = DEFAULT_MODEL, max_turns: int = 20) -> tuple[s
         response_parts = []
         for fc in fn_calls:
             args = dict(fc.args or {})
-            print(f"[orchestrator] turn {turn}: calling {fc.name}({args})")
+            _t0, _begin = time.time(), time.strftime('%H:%M:%S')
+            print(f"[orchestrator] [{_begin}] turn {turn}: calling {fc.name}({args})")
             result = call_tool(fc.name, args)
-            print(f"[orchestrator] -> {result}")
+            _dt = time.time() - _t0
+            print(f"[orchestrator] [{time.strftime('%H:%M:%S')}] {fc.name} done in {_dt:.1f}s -> {result}")
+            _log_timing(args, fc.name, _begin, _dt)
+            if fc.name == "encode" and on_video and isinstance(result, dict) and result.get("video_path"):
+                try:
+                    on_video(result["video_path"])   # push the video to the user before eval runs
+                except Exception as e:
+                    print(f"[orchestrator] on_video callback failed: {e}")
             if fc.name == "evaluate":
                 eval_scores = result
             response_parts.append(types.Part(function_response=types.FunctionResponse(

@@ -66,7 +66,7 @@ async def videopainter_generate_remote(
     branch: str = "",       # ignored
     id_lora: str = "",      # ignored
     dilate: int = 12,
-    steps: int = 50,
+    steps: int = 10,
     guidance: float = 6.0,
     seed: int = 42,
     resume: bool = False,

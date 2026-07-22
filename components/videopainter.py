@@ -80,6 +80,7 @@ def load_pipeline(model_path, branch, id_lora, dtype=torch.bfloat16, device=None
     #   none       -> keep everything resident on GPU: fastest (~44GB resident) —
     #                 fine on an 80GB card running solo; OOMs a small card.
     mode = (offload or os.environ.get("VP_OFFLOAD") or "sequential").lower()
+    print(f"[videopainter] offload mode: {mode!r}  (none=fastest, sequential=slowest default)", flush=True)
     if mode == "sequential":
         pipe.enable_sequential_cpu_offload()
     elif mode == "model":
@@ -121,7 +122,7 @@ def load_segment_inputs(frames_dir, mask_dir, start, total, dilate):
     return video, masks, names
 
 
-def run_segment(pipe, video, masks, first_frame, prompt, *, steps=50, guidance=6.0,
+def run_segment(pipe, video, masks, first_frame, prompt, *, steps=10, guidance=6.0,
                 seed=42, overlap_frames=0, prev_clip_weight=0.5):
     """Generate one segment. video/masks are PIL lists (already 720x480).
 
@@ -161,7 +162,7 @@ def run_segment(pipe, video, masks, first_frame, prompt, *, steps=50, guidance=6
 
 
 def generate(pipe, frames_dir, mask_dir, anchor_for_start, out_dir, *,
-             segment_starts=None, total=CLIP, prompt="", dilate=12, steps=50,
+             segment_starts=None, total=CLIP, prompt="", dilate=12, steps=10,
              guidance=6.0, seed=42, overlap_frames=0, prev_clip_weight=0.5):
     """Run all segments with a single loaded pipeline.
 
@@ -205,7 +206,7 @@ if __name__ == "__main__":
     ap.add_argument("--branch", default="ckpt/VideoPainter/checkpoints/branch")
     ap.add_argument("--id_lora", default="ckpt/VideoPainterID/checkpoints")
     ap.add_argument("--dilate", type=int, default=12)
-    ap.add_argument("--steps", type=int, default=50)
+    ap.add_argument("--steps", type=int, default=10)
     ap.add_argument("--guidance", type=float, default=6.0)
     ap.add_argument("--seed", type=int, default=42)
     args = ap.parse_args()
