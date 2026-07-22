@@ -129,6 +129,32 @@ def sam3_mask(
     except Exception as e:
         return _err(f"sam3_mask failed: {e}", e)
 
+# ─────────────────────────────────────────────────────────────────────────────
+# T3b — detect_camera_motion (routes generator/anchor choice)
+# ─────────────────────────────────────────────────────────────────────────────
+ 
+@mcp.tool(description=TOOLS["detect_camera_motion"]["description"])
+def detect_camera_motion(
+    frames_dir: str,
+    mask_dir: Optional[str] = None,
+    stride: int = 6,
+    px_threshold: float = 8.0,
+) -> dict:
+    try:
+        _guard("detect_camera_motion", {"frames_dir": frames_dir})
+        from components import camera_motion
+        result = camera_motion.detect(
+            frames_dir, mask_dir, stride=stride, px_threshold=px_threshold
+        )
+        # samples are useful for debugging but bulky/non-essential for the
+        # orchestrator's routing decision — keep the response lean.
+        result.pop("samples", None)
+        return _ok(**result)
+    except Exception as e:
+        return _err(f"detect_camera_motion failed: {e}", e)
+ 
+
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # T4 — roma_edit_mask
@@ -198,6 +224,45 @@ def roma_anchors(
         return _ok(anchor_map=anchor_map)
     except Exception as e:
         return _err(f"roma_anchors failed: {e}", e)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# T5b — mvinpainter_anchors (large camera motion route)
+# ─────────────────────────────────────────────────────────────────────────────
+ 
+@mcp.tool(description=TOOLS["mvinpainter_anchors"]["description"])
+def mvinpainter_anchors(
+    frames_dir: str,
+    ref0_path: str,
+    mask_dir: str,
+    work_dir: str,
+    segment_starts: list,
+    n_views: int = 24,
+    prompt: str = "",
+    name: str = "mvi_anchor",
+) -> dict:
+    try:
+        _guard("mvinpainter_anchors", {
+            "frames_dir": frames_dir, "ref0_path": ref0_path, "mask_dir": mask_dir,
+            "work_dir": work_dir, "segment_starts": segment_starts,
+        })
+        from components.anchor import get_anchor
+        an = get_anchor(
+            "mvinpainter",
+            frames_dir=frames_dir,
+            ref0_path=ref0_path,
+            mask_dir=mask_dir,
+            work_dir=work_dir,
+            n_views=n_views,
+            prompt=prompt,
+            name=name,
+        )
+        an.prepare()
+        anchor_map = {str(s): an.anchor_path_for_start(s) for s in segment_starts}
+        return _ok(anchor_map=anchor_map)
+    except Exception as e:
+        return _err(f"mvinpainter_anchors failed: {e}", e)
+
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -296,6 +361,51 @@ def videopainter_generate(
         return _ok(gen_frames_dir=gen_frames_dir, n_frames_generated=n)
     except Exception as e:
         return _err(f"videopainter_generate failed: {e}", e)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# T7b — mvinpainter_generate (large camera motion route)
+# ─────────────────────────────────────────────────────────────────────────────
+ 
+@mcp.tool(description=TOOLS["mvinpainter_generate"]["description"])
+def mvinpainter_generate(
+    frames_dir: str,
+    mask_dir: str,
+    anchor_map: dict,
+    gen_dir: str,
+    segment_starts: list,
+    prompt: str = "",
+    chunk: int = 20,
+    resume: bool = False,
+) -> dict:
+    try:
+        _guard("mvinpainter_generate", {
+            "frames_dir": frames_dir, "mask_dir": mask_dir, "anchor_map": anchor_map,
+            "gen_dir": gen_dir, "segment_starts": segment_starts,
+        })
+        from components import extract
+        from components import mvinpainter as mvi
+ 
+        gen_frames_dir = os.path.join(gen_dir, "frames")
+        if resume and extract.has_frames(gen_frames_dir):
+            n = _count_frames(gen_frames_dir)
+            print(f"[mvinpainter_generate] resume: reusing {n} frames in {gen_frames_dir}")
+            return _ok(gen_frames_dir=gen_frames_dir, n_frames_generated=n)
+ 
+        def anchor_for_start(s):
+            p = anchor_map.get(str(s)) or anchor_map.get(s)
+            if p is None:
+                raise KeyError(f"no anchor for segment start={s} in anchor_map")
+            return p   # mvinpainter.generate_chunked expects a PATH, not a PIL image
+ 
+        mvi.generate_chunked(
+            frames_dir, mask_dir, anchor_for_start, gen_dir,
+            segment_starts=segment_starts, chunk=chunk, prompt=prompt,
+        )
+        n = _count_frames(gen_frames_dir)
+        return _ok(gen_frames_dir=gen_frames_dir, n_frames_generated=n)
+    except Exception as e:
+        return _err(f"mvinpainter_generate failed: {e}", e)
+
 
 
 # ─────────────────────────────────────────────────────────────────────────────

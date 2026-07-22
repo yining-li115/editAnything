@@ -59,6 +59,36 @@ TOOLS: dict = {
     },
 
     # ------------------------------------------------------------------
+    # T3b — camera-motion detector (routes generator/anchor choice)
+    # ------------------------------------------------------------------
+    "detect_camera_motion": {
+        "description": (
+            "Decide whether the clip has CAMERA motion (pan/dolly/zoom/handheld) "
+            "as opposed to just OBJECT motion, by matching ORB keypoints EXCLUDING "
+            "the given SOURCE object mask (so a moving object is never mistaken for "
+            "a moving camera) and fitting a RANSAC homography between sampled frame "
+            "pairs. Call this right after sam3_mask, passing its mask_dir. "
+            "Use the result to choose the generation route: "
+            "camera_motion=false -> roma_anchors + videopainter_generate (cheap, "
+            "assumes ~static background); camera_motion=true -> mvinpainter_anchors "
+            "+ mvinpainter_generate (handles large viewpoint change, more expensive)."
+        ),
+        "inputs": {
+            "frames_dir":    {"type": "string", "description": "ORIGINAL source frames directory (frame_*.png)."},
+            "mask_dir":      {"type": ["string", "null"], "description": "SOURCE object mask directory (e.g. sam3_mask's mask_dir). Strongly recommended so object motion isn't mistaken for camera motion.", "default": None},
+            "stride":        {"type": "integer", "description": "Frame gap between sampled pairs.", "default": 6},
+            "px_threshold":  {"type": "number",  "description": "Minimum implied background displacement (pixels) to count a pair as camera motion.", "default": 8.0},
+        },
+        "outputs": {
+            "camera_motion":        {"type": "boolean", "description": "True if the clip shows coherent background/camera motion."},
+            "coherent_fraction":    {"type": "number",  "description": "Fraction of sampled frame pairs flagged as coherent camera motion."},
+            "median_transform_px":  {"type": "number",  "description": "Median implied background pixel displacement across sampled pairs."},
+            "n_pairs_sampled":      {"type": "integer", "description": "Number of frame pairs actually evaluated."},
+        },
+    },
+
+
+    # ------------------------------------------------------------------
     # T4 — RoMa edit-mask (frame-0 region warped per frame)
     # ------------------------------------------------------------------
     "roma_edit_mask": {
@@ -105,6 +135,39 @@ TOOLS: dict = {
             },
         },
     },
+
+
+    # ------------------------------------------------------------------
+    # T5b — MVInpainter per-segment anchors (large camera motion)
+    # ------------------------------------------------------------------
+    "mvinpainter_anchors": {
+        "description": (
+            "Build per-segment anchors with MVInpainter's own multi-view pass "
+            "instead of RoMa warping. Stays clean at large viewpoint changes "
+            "(handheld pans, dolly moves, top-down angles) where RoMa warping "
+            "shears. Use this — paired with mvinpainter_generate — when "
+            "detect_camera_motion reports camera_motion=true. Slower than "
+            "roma_anchors (runs the MVInpainter model as a subprocess in its own env)."
+        ),
+        "inputs": {
+            "frames_dir":      {"type": "string", "description": "Source frames directory."},
+            "ref0_path":       {"type": "string", "description": "Clean first-frame reference (new object in scene)."},
+            "mask_dir":        {"type": "string", "description": "Per-frame edit-region mask (same one videopainter/mvinpainter generation will use)."},
+            "work_dir":        {"type": "string", "description": "Working directory for the anchor pass outputs."},
+            "segment_starts":  {"type": "array", "items": {"type": "integer"},
+                                 "description": "List of 0-indexed frame numbers that start each segment."},
+            "n_views":         {"type": "integer", "description": "Sampled anchor views for the MVInpainter pass (<=32, model PE cap).", "default": 24},
+            "prompt":          {"type": "string",  "description": "Generation prompt passed through to the anchor pass.", "default": ""},
+            "name":            {"type": "string",  "description": "Run name for the anchor pass's output folder.", "default": "mvi_anchor"},
+        },
+        "outputs": {
+            "anchor_map": {
+                "type": "object",
+                "description": "Dict mapping str(start) -> absolute anchor image path.",
+            },
+        },
+    },
+
 
     # ------------------------------------------------------------------
     # T6 — Gemini frame-0 edit (generate the ref0)
@@ -164,6 +227,38 @@ TOOLS: dict = {
             "n_frames_generated":{"type": "integer", "description": "Number of frames written."},
         },
     },
+
+    # ------------------------------------------------------------------
+    # T7b — MVInpainter generation (large camera motion)
+    # ------------------------------------------------------------------
+    "mvinpainter_generate": {
+        "description": (
+            "Run MVInpainter as the generator, per-chunk reanchored (same chunked "
+            "shape as videopainter_generate, but a multi-view IMAGE model fills each "
+            "chunk instead of a video model). Use this — paired with mvinpainter_anchors "
+            "— when detect_camera_motion reports camera_motion=true: it stays consistent "
+            "at large viewpoint changes where videopainter's background-context "
+            "assumption breaks down. Runs as a subprocess in its own env. "
+            "Returns immediately if resume=true and gen_dir already has frames."
+        ),
+        "inputs": {
+            "frames_dir":     {"type": "string",  "description": "Source frames directory."},
+            "mask_dir":       {"type": "string",  "description": "Per-frame edit-region masks (same mask_dir as videopainter_generate would use)."},
+            "anchor_map":     {"type": "object",  "description": "Dict str(start)->anchor_path from mvinpainter_anchors."},
+            "gen_dir":        {"type": "string",  "description": "Output directory; frames go into gen_dir/frames/."},
+            "segment_starts": {"type": "array", "items": {"type": "integer"},
+                                "description": "List of 0-indexed segment start frames."},
+            "prompt":         {"type": "string",  "description": "Global generation prompt for the edited video.", "default": ""},
+            "chunk":          {"type": "integer", "description": "Consecutive frames per reanchor chunk (<= mvinpainter_anchors' n_views).", "default": 20},
+            "resume":         {"type": "boolean", "description": "Skip generation if gen_dir already has frames.", "default": False},
+        },
+        "outputs": {
+            "gen_frames_dir":     {"type": "string",  "description": "Absolute path to generated frames directory."},
+            "n_frames_generated": {"type": "integer", "description": "Number of frames written."},
+        },
+    },
+ 
+
 
     # ------------------------------------------------------------------
     # T8 — ROSE removal (clean plate)
