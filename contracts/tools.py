@@ -254,7 +254,7 @@ TOOLS: dict = {
                                 "description": "0-indexed segment start frames."},
             "prompt":         {"type": "string",  "description": "Global generation prompt for the edited video.", "default": ""},
             "chunk":          {"type": "integer", "description": "Consecutive frames per reanchor chunk (<= mvinpainter_anchors' n_views).", "default": 20},
-            "steps":          {"type": "integer", "description": "Diffusion inference steps per chunk (default 50); lower = faster, some quality cost.", "default": 50},
+            "steps":          {"type": "integer", "description": "Diffusion inference steps per chunk (default 50); lower = faster, some quality cost.", "default": 10},
             "resume":         {"type": "boolean", "description": "Skip generation if gen_dir already has frames.", "default": False},
         },
         "outputs": {

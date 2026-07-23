@@ -394,7 +394,7 @@ def mvinpainter_generate(
     segment_starts: list,
     prompt: str = "",
     chunk: int = 20,
-    steps: int = 50,
+    steps: int = 10,
     resume: bool = False,
 ) -> dict:
     try:
