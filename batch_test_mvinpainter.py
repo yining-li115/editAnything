@@ -27,6 +27,7 @@ import argparse
 import os
 import shutil
 import sys
+import glob
 import time
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -88,27 +89,41 @@ def main():
     _, dt = _timed(f"mvinpainter_anchors (steps={args.anchor_steps or 'default'})", _run_anchor)
     durations["mvinpainter_anchors"] = dt
 
-    # ── MVInpainter generation fill, swept across --inference_step values ──
+    # ── MVInpainter anchors (once, for all chunk tests) ─────────────────────
+    n_frames = len(glob.glob(os.path.join(args.frames_dir, "frame_*.png")))
+    chunk_size = 20
+    segment_starts = list(range(0, n_frames, chunk_size))[:4]  # Only first 4 chunks
+    print(f"\n[chunked test] n_frames={n_frames}, chunk_size={chunk_size}, segment_starts={segment_starts}")
+    
+    anchor_work_dir = os.path.join(args.out_root, "anchors_chunked")
+    an = get_anchor(
+        "mvinpainter", frames_dir=args.frames_dir, ref0_path=args.ref0,
+        mask_dir=args.mask_dir, work_dir=anchor_work_dir, n_views=args.nframe,
+        prompt=args.prompt, name="chunked_test", steps=args.anchor_steps,
+    )
+    an.prepare()
+    
+    def anchor_for_start(s):
+        return an.anchor_path_for_start(s)
+
+    # ── MVInpainter generation fill (chunked), swept across --inference_step values ──
     step_values = [int(s) for s in args.steps.split(",")]
     gen_results = []
 
     for steps in step_values:
-        run_dir = os.path.join(args.out_root, f"steps_{steps}")
+        run_dir = os.path.join(args.out_root, f"steps_{steps}_chunked")
         if args.force and os.path.exists(run_dir):
             shutil.rmtree(run_dir)
 
-        out_dir, dt = _timed(f"mvinpainter_generate (steps={steps})", lambda: mvinpainter.generate(
-            args.frames_dir, args.mask_dir, args.ref0, run_dir,
-            mode="single", nframe=args.nframe, prompt=args.prompt,
-            smooth=False, res=args.res, steps=steps,
-            name=f"steps_test_{steps}",
+        out_dir, dt = _timed(f"mvinpainter_generate_chunked (steps={steps})", lambda s=steps: mvinpainter.generate_chunked(
+            args.frames_dir, args.mask_dir, anchor_for_start, run_dir,
+            segment_starts=segment_starts, chunk=chunk_size, prompt=args.prompt,
+            smooth=False, steps=s, name=f"chunked_test_{s}",
         ))
-        n_frames = len(os.listdir(out_dir)) if os.path.isdir(out_dir) else 0
-        gen_results.append((steps, dt, n_frames, out_dir))
-        print(f">>> steps={steps}: {dt:.1f}s total ({dt / max(n_frames, 1):.2f}s/frame), "
-              f"{n_frames} frames -> {out_dir}")
-
-    # ── Summary ──────────────────────────────────────────────────────────────
+        n_out_frames = len(glob.glob(os.path.join(out_dir, "frame_*.png")))
+        gen_results.append((steps, dt, n_out_frames, out_dir))
+        print(f">>> steps={steps}: {dt:.1f}s total ({dt / max(n_out_frames, 1):.2f}s/frame), "
+              f"{n_out_frames} frames -> {out_dir}")    # ── Summary ──────────────────────────────────────────────────────────────
     print(f"\n\n{'=' * 60}\nSUMMARY\n{'=' * 60}")
     if "sam3_mask" in durations:
         print(f"{'sam3_mask':<28} {durations['sam3_mask']:>10.1f}s")
