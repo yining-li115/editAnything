@@ -114,10 +114,9 @@ def main():
         run_dir = os.path.join(args.out_root, f"steps_{steps}_chunked")
         if args.force and os.path.exists(run_dir):
             shutil.rmtree(run_dir)
-
         out_dir, dt = _timed(f"mvinpainter_generate_chunked (steps={steps})", lambda s=steps: mvinpainter.generate_chunked(
             args.frames_dir, args.mask_dir, anchor_for_start, run_dir,
-            segment_starts=segment_starts, chunk=chunk_size, prompt=args.prompt, steps=s, name=f"chunked_test_{s}",
+            segment_starts=segment_starts, chunk=chunk_size, prompt=args.prompt, steps=s,
         ))
         n_out_frames = len(glob.glob(os.path.join(out_dir, "frame_*.png")))
         gen_results.append((steps, dt, n_out_frames, out_dir))
