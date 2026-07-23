@@ -63,33 +63,31 @@ TOOLS: dict = {
     # ------------------------------------------------------------------
     "detect_camera_motion": {
         "description": (
-            "Decide whether the clip has CAMERA motion (pan/dolly/zoom/handheld) "
-            "as opposed to just OBJECT motion, by matching ORB keypoints EXCLUDING "
-            "the given SOURCE object mask (so a moving object is never mistaken for "
-            "a moving camera) and fitting a RANSAC homography between sampled frame "
-            "pairs. Call this right after sam3_mask, passing its mask_dir. "
-            "Use the result to choose the generation route: "
-            "camera_motion=false -> roma_anchors + videopainter_generate (cheap, "
-            "assumes ~static background); camera_motion=true -> mvinpainter_anchors "
-            "+ mvinpainter_generate (handles large viewpoint change, more expensive)."
+            "Decide if the clip has CAMERA motion (pan/dolly/zoom/handheld) vs "
+            "just OBJECT motion, via background-only ORB+RANSAC homography "
+            "(excludes the SOURCE mask so the edited object is never mistaken "
+            "for camera motion). Call right after sam3_mask, passing its "
+            "mask_dir. camera_motion=false -> roma_anchors + "
+            "videopainter_generate; camera_motion=true -> mvinpainter_anchors "
+            "+ mvinpainter_generate."
         ),
         "inputs": {
             "frames_dir":    {"type": "string", "description": "ORIGINAL source frames directory (frame_*.png)."},
-            "mask_dir":      {"type": ["string", "null"], "description": "SOURCE object mask directory (e.g. sam3_mask's mask_dir). Strongly recommended so object motion isn't mistaken for camera motion.", "default": None},
+            "mask_dir":      {"type": ["string", "null"], "description": "SOURCE object mask dir (sam3_mask's output). Recommended.", "default": None},
             "stride":        {"type": "integer", "description": "Frame gap between sampled pairs.", "default": 6},
-            "px_threshold":  {"type": "number",  "description": "Minimum implied background displacement (pixels) for a pair's homography fit to count as coherent.", "default": 8.0},
-            "inlier_ratio_thresh": {"type": "number", "description": "Minimum RANSAC inlier ratio for a pair's homography fit to count as coherent. Lower this for translating/handheld cameras with scene depth (parallax) — no single homography fits all background points well in that case, so inlier ratio stays low even under real motion.", "default": 0.6},
-            "coherent_fraction_thresh": {"type": "number", "description": "Minimum fraction of sampled pairs that must be coherent for camera_motion=true. Lower this alongside inlier_ratio_thresh for parallax-heavy footage, where only a minority of pairs will ever fit one global homography well even under strong real motion.", "default": 0.5},
-            "fps":           {"type": "number", "description": "Clip frame rate, used only to compute duration_sec (n_frames/fps) for the min_duration_sec gate.", "default": 25.0},
-            "min_duration_sec": {"type": "number", "description": "Clips shorter than this (in seconds) are forced to camera_motion=false WITHOUT running detection — short clips rarely give enough camera travel for a reliable moving-vs-static call. Set to 0 to disable this gate.", "default": 3.0},
+            "px_threshold":  {"type": "number",  "description": "Min displacement (px) for a homography fit to count as coherent.", "default": 8.0},
+            "inlier_ratio_thresh": {"type": "number", "description": "Min RANSAC inlier ratio to count as coherent; lower for handheld/parallax footage.", "default": 0.6},
+            "coherent_fraction_thresh": {"type": "number", "description": "Min fraction of coherent pairs needed for camera_motion=true.", "default": 0.5},
+            "raw_motion_px_threshold": {"type": "number", "description": "Fallback: median displacement (px) alone triggers camera_motion=true even without a coherent homography (catches parallax).", "default": 100.0},
+            "fps":           {"type": "number", "description": "Clip fps, used for the min_duration_sec gate.", "default": 25.0},
+            "min_duration_sec": {"type": "number", "description": "Clips shorter than this are forced camera_motion=false, skipping detection. 0 disables.", "default": 3.0},
         },
         "outputs": {
-            "camera_motion":        {"type": "boolean", "description": "True if the clip shows coherent background/camera motion."},
-            "coherent_fraction":    {"type": "number",  "description": "Fraction of sampled frame pairs flagged as coherent camera motion."},
-            "median_transform_px":  {"type": "number",  "description": "Median implied background pixel displacement across sampled pairs."},
-            "n_pairs_sampled":      {"type": "integer", "description": "Number of frame pairs actually evaluated."},
+            "camera_motion":        {"type": "boolean", "description": "True if the clip shows camera motion."},
+            "coherent_fraction":    {"type": "number",  "description": "Fraction of sampled pairs with a coherent homography fit."},
+            "median_transform_px":  {"type": "number",  "description": "Median implied background displacement across sampled pairs."},
+            "n_pairs_sampled":      {"type": "integer", "description": "Number of frame pairs evaluated."},
         },
-
     },
 
 
@@ -147,24 +145,22 @@ TOOLS: dict = {
     # ------------------------------------------------------------------
     "mvinpainter_anchors": {
         "description": (
-            "Build per-segment anchors with MVInpainter's own multi-view pass "
-            "instead of RoMa warping. Stays clean at large viewpoint changes "
-            "(handheld pans, dolly moves, top-down angles) where RoMa warping "
-            "shears. Use this — paired with mvinpainter_generate — when "
-            "detect_camera_motion reports camera_motion=true. Slower than "
-            "roma_anchors (runs the MVInpainter model as a subprocess in its own env)."
+            "Per-segment anchors via MVInpainter's own multi-view pass instead "
+            "of RoMa warping — stays clean at large viewpoint changes where "
+            "RoMa shears. Use with mvinpainter_generate when camera_motion=true. "
+            "Slower (subprocess in its own env)."
         ),
         "inputs": {
             "frames_dir":      {"type": "string", "description": "Source frames directory."},
             "ref0_path":       {"type": "string", "description": "Clean first-frame reference (new object in scene)."},
-            "mask_dir":        {"type": "string", "description": "Per-frame edit-region mask (same one videopainter/mvinpainter generation will use)."},
+            "mask_dir":        {"type": "string", "description": "Edit-region mask (same one videopainter/mvinpainter generation uses)."},
             "work_dir":        {"type": "string", "description": "Working directory for the anchor pass outputs."},
             "segment_starts":  {"type": "array", "items": {"type": "integer"},
-                                 "description": "List of 0-indexed frame numbers that start each segment."},
-            "n_views":         {"type": "integer", "description": "Sampled anchor views for the MVInpainter pass (<=32, model PE cap).", "default": 24},
-            "prompt":          {"type": "string",  "description": "Generation prompt passed through to the anchor pass.", "default": ""},
+                                 "description": "0-indexed frame numbers that start each segment."},
+            "n_views":         {"type": "integer", "description": "Sampled anchor views (<=32, model PE cap).", "default": 24},
+            "prompt":          {"type": "string",  "description": "Generation prompt for the anchor pass.", "default": ""},
             "name":            {"type": "string",  "description": "Run name for the anchor pass's output folder.", "default": "mvi_anchor"},
-            "steps":           {"type": ["integer", "null"], "description": "Diffusion inference steps for the anchor pass.", "default": None},
+            "steps":           {"type": ["integer", "null"], "description": "Diffusion inference steps (default 50); lower = faster, some quality cost. null = component default.", "default": None},
         },
         "outputs": {
             "anchor_map": {
@@ -239,25 +235,23 @@ TOOLS: dict = {
     # ------------------------------------------------------------------
     "mvinpainter_generate": {
         "description": (
-            "Run MVInpainter as the generator, per-chunk reanchored (same chunked "
-            "shape as videopainter_generate, but a multi-view IMAGE model fills each "
-            "chunk instead of a video model). Use this — paired with mvinpainter_anchors "
-            "— when detect_camera_motion reports camera_motion=true: it stays consistent "
-            "at large viewpoint changes where videopainter's background-context "
-            "assumption breaks down. Runs as a subprocess in its own env. "
-            "Returns immediately if resume=true and gen_dir already has frames."
+            "MVInpainter as generator, per-chunk reanchored (same shape as "
+            "videopainter_generate, but a multi-view IMAGE model fills each "
+            "chunk). Use with mvinpainter_anchors when camera_motion=true — "
+            "stays consistent at large viewpoint changes where videopainter's "
+            "fixed-background assumption breaks. Subprocess in its own env."
         ),
         "inputs": {
             "frames_dir":     {"type": "string",  "description": "Source frames directory."},
-            "mask_dir":       {"type": "string",  "description": "Per-frame edit-region masks (same mask_dir as videopainter_generate would use)."},
+            "mask_dir":       {"type": "string",  "description": "Edit-region mask (same one videopainter_generate would use)."},
             "anchor_map":     {"type": "object",  "description": "Dict str(start)->anchor_path from mvinpainter_anchors."},
             "gen_dir":        {"type": "string",  "description": "Output directory; frames go into gen_dir/frames/."},
             "segment_starts": {"type": "array", "items": {"type": "integer"},
-                                "description": "List of 0-indexed segment start frames."},
+                                "description": "0-indexed segment start frames."},
             "prompt":         {"type": "string",  "description": "Global generation prompt for the edited video.", "default": ""},
             "chunk":          {"type": "integer", "description": "Consecutive frames per reanchor chunk (<= mvinpainter_anchors' n_views).", "default": 20},
+            "steps":          {"type": "integer", "description": "Diffusion inference steps per chunk (default 50); lower = faster, some quality cost.", "default": 50},
             "resume":         {"type": "boolean", "description": "Skip generation if gen_dir already has frames.", "default": False},
-            "steps":          {"type": "integer", "description": "Diffusion inference steps per chunk.", "default": 50},
         },
         "outputs": {
             "gen_frames_dir":     {"type": "string",  "description": "Absolute path to generated frames directory."},

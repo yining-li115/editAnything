@@ -63,6 +63,7 @@ def detect(
     px_threshold: float = 8.0,
     inlier_ratio_thresh: float = 0.6,
     coherent_fraction_thresh: float = 0.5,
+    raw_motion_px_threshold: float = 100.0,
     min_points: int = 30,
     mask_erode_px: int = 15,
     fps: float = 25.0,
@@ -83,11 +84,25 @@ def detect(
                 call, and skipping it also saves the ORB/RANSAC cost. Set
                 min_duration_sec=0 to disable this gate entirely.
 
+    Two independent signals are OR'd together, because a rigid homography only
+    correctly models pure camera rotation or a flat/planar scene:
+      - "coherent" (Signal A): coherent_fraction >= coherent_fraction_thresh —
+        a single global transform explains a high fraction of background
+        matches, above px_threshold. Works well for pans/rotation/zoom.
+      - "raw motion" (Signal B): median_transform_px >= raw_motion_px_threshold
+        — catches translating (dolly/handheld) cameras with real scene depth
+        (parallax), where no single homography fits well so inlier_ratio (and
+        therefore coherent_fraction) stays low even though the background is
+        clearly moving a lot. This signal doesn't require rigid-transform
+        agreement, just a large typical implied displacement.
+
     Returns:
         {
           "camera_motion": bool,
           "coherent_fraction": float,        # fraction of sampled pairs flagged coherent
           "median_transform_px": float,      # typical implied background displacement
+          "coherent_signal": bool,           # Signal A fired
+          "raw_motion_signal": bool,         # Signal B fired
           "n_pairs_sampled": int,
           "duration_sec": float,             # n_frames / fps
           "forced_static_short_clip": bool,  # True if the duration gate fired
@@ -105,6 +120,8 @@ def detect(
             "camera_motion": False,
             "coherent_fraction": 0.0,
             "median_transform_px": 0.0,
+            "coherent_signal": False,
+            "raw_motion_signal": False,
             "n_pairs_sampled": 0,
             "duration_sec": round(duration_sec, 2),
             "forced_static_short_clip": True,
@@ -118,6 +135,8 @@ def detect(
             "camera_motion": False,
             "coherent_fraction": 0.0,
             "median_transform_px": 0.0,
+            "coherent_signal": False,
+            "raw_motion_signal": False,
             "n_pairs_sampled": 0,
             "duration_sec": round(duration_sec, 2),
             "forced_static_short_clip": False,
@@ -184,6 +203,8 @@ def detect(
             "camera_motion": False,
             "coherent_fraction": 0.0,
             "median_transform_px": 0.0,
+            "coherent_signal": False,
+            "raw_motion_signal": False,
             "n_pairs_sampled": 0,
             "duration_sec": round(duration_sec, 2),
             "forced_static_short_clip": False,
@@ -193,12 +214,17 @@ def detect(
 
     coherent_fraction = sum(s["coherent"] for s in samples) / len(samples)
     median_transform_px = float(np.median([s["transform_px"] for s in samples]))
-    camera_motion = coherent_fraction >= coherent_fraction_thresh
+
+    coherent_signal = coherent_fraction >= coherent_fraction_thresh
+    raw_motion_signal = median_transform_px >= raw_motion_px_threshold
+    camera_motion = coherent_signal or raw_motion_signal
 
     return {
         "camera_motion": camera_motion,
         "coherent_fraction": round(coherent_fraction, 3),
         "median_transform_px": round(median_transform_px, 2),
+        "coherent_signal": coherent_signal,
+        "raw_motion_signal": raw_motion_signal,
         "n_pairs_sampled": len(samples),
         "duration_sec": round(duration_sec, 2),
         "forced_static_short_clip": False,

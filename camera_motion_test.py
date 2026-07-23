@@ -77,19 +77,6 @@ VIDEOS = [
     #  "source": "cup", "label": "static"},
 ]
 
-VIDEOS = [
-    {"name": "cake-full", "video_path": "/workspace/editAnything/input/camera_motion_test/cake-full.mp4", "source": "cake", "label": "motion"},
-    {"name": "cake_first_frames",       "video_path": "/workspace/editAnything/input/camera_motion_test/cake_first_frames.mp4", "source": "cake", "label": "static"},
-    {"name": "cup5_camera_moving_full",   "video_path": "/workspace/editAnything/input/camera_motion_test/cup5_camera_moving_full.mp4", "source": "cup", "label": "motion"},
-    {"name": "cup5-camera-moving-short_big_motion",   "video_path": "/workspace/editAnything/input/camera_motion_test/cup5-camera-moving-short_big_motion.mp4", "source": "cup", "label": "motion"},
-    {"name": "cup5-camera-moving-short_small_motion",   "video_path": "/workspace/editAnything/input/camera_motion_test/cup5-camera-moving-short_small_motion.mp4", "source": "cup", "label": "static"},
-    {"name": "iced_coffee_with_maple_leaves",   "video_path": "/workspace/editAnything/input/camera_motion_test/iced_coffee_with_maple_leaves.mp4", "source": "iced coffee", "label": "static"},
-    {"name": "cup2",   "video_path": "/workspace/editAnything/input/cup2.mp4", "source": "cup", "label": "static"},
-    {"name": "pomelo_in_sunlight",   "video_path": "/workspace/editAnything/input/camera_motion_test/pomelo_in_sunlight.mp4", "source": "pomelo", "label": "static"},
-    {"name": "woman_holding_donut",   "video_path": "/workspace/editAnything/input/camera_motion_test/woman_holding_donut.mp4", "source": "donut", "label": "static"},
-
-]
-
 CACHE_PATH = os.path.join(_HERE, "camera_motion_samples_cache.json")
 OUT_ROOT = os.path.join(_HERE, "outputs")
 
@@ -156,30 +143,37 @@ def compute_all_samples(videos, stride, max_pairs, cache_path, force=False):
     return cache
 
 
-def recompute(samples, px_threshold, inlier_ratio_thresh, coherent_fraction_thresh):
+def recompute(samples, px_threshold, inlier_ratio_thresh, coherent_fraction_thresh, raw_motion_px_threshold):
     coherent = [s for s in samples
                 if s["n_matches"] > 0
                 and s["inlier_ratio"] >= inlier_ratio_thresh
                 and s["transform_px"] >= px_threshold]
-    frac = len(coherent) / len(samples) if samples else 0.0
-    return frac, frac >= coherent_fraction_thresh
+    coherent_fraction = len(coherent) / len(samples) if samples else 0.0
+    coherent_signal = coherent_fraction >= coherent_fraction_thresh
+
+    median_transform_px = sorted(s["transform_px"] for s in samples)[len(samples) // 2] if samples else 0.0
+    raw_motion_signal = median_transform_px >= raw_motion_px_threshold
+
+    return coherent_fraction, (coherent_signal or raw_motion_signal)
 
 
-def report_single(cache, px_threshold, inlier_ratio_thresh, coherent_fraction_thresh):
+def report_single(cache, px_threshold, inlier_ratio_thresh, coherent_fraction_thresh, raw_motion_px_threshold):
     print(f"\n{'video':<22} {'label':<8} {'coherent_frac':>14} {'median_px':>10} {'camera_motion':>14}  correct?")
     print("-" * 82)
     for key, entry in cache.items():
         name = key.split("::")[0]
         samples = entry["samples"]
         label = entry.get("label")
-        frac, motion = recompute(samples, px_threshold, inlier_ratio_thresh, coherent_fraction_thresh)
+        frac, motion = recompute(samples, px_threshold, inlier_ratio_thresh,
+                                 coherent_fraction_thresh, raw_motion_px_threshold)
         median_px = sorted(s["transform_px"] for s in samples)[len(samples) // 2] if samples else 0.0
         expected = None if label is None else (label == "motion")
         correct = "?" if expected is None else ("OK" if motion == expected else "WRONG")
         print(f"{name:<22} {str(label):<8} {frac:>14.3f} {median_px:>10.1f} {str(motion):>14}  {correct}")
     print("-" * 82)
     print(f"px_threshold={px_threshold}  inlier_ratio_thresh={inlier_ratio_thresh}  "
-          f"coherent_fraction_thresh={coherent_fraction_thresh}")
+          f"coherent_fraction_thresh={coherent_fraction_thresh}  "
+          f"raw_motion_px_threshold={raw_motion_px_threshold}")
 
 
 def sweep(cache):
@@ -192,21 +186,23 @@ def sweep(cache):
         return
 
     best = []
-    for px in (4.0, 6.0, 8.0, 10.0, 12.0):
+    for px in (4.0, 6.0, 8.0, 10.0, 12.0, 20.0, 40.0, 60.0):
         for ir in (0.6, 0.5, 0.4, 0.3, 0.25, 0.2):
             for maj in (0.5, 0.4, 0.3, 0.25, 0.2, 0.15):
-                correct = 0
-                for entry in labeled.values():
-                    frac, motion = recompute(entry["samples"], px, ir, maj)
-                    if motion == (entry["label"] == "motion"):
-                        correct += 1
-                if correct == len(labeled):
-                    best.append((px, ir, maj))
+                for raw in (60.0, 80.0, 100.0, 120.0, 150.0, 999999.0):  # 999999 effectively disables Signal B
+                    correct = 0
+                    for entry in labeled.values():
+                        frac, motion = recompute(entry["samples"], px, ir, maj, raw)
+                        if motion == (entry["label"] == "motion"):
+                            correct += 1
+                    if correct == len(labeled):
+                        best.append((px, ir, maj, raw))
 
     print(f"\n=== {len(best)} threshold combo(s) correctly classify all "
           f"{len(labeled)} labeled video(s) ===")
-    for px, ir, maj in best[:30]:
-        print(f"  px_threshold={px:<5} inlier_ratio_thresh={ir:<5} coherent_fraction_thresh={maj:<5}")
+    for px, ir, maj, raw in best[:30]:
+        print(f"  px_threshold={px:<5} inlier_ratio_thresh={ir:<5} "
+              f"coherent_fraction_thresh={maj:<5} raw_motion_px_threshold={raw:<8}")
     if len(best) > 30:
         print(f"  ... ({len(best) - 30} more)")
     if not best:
@@ -231,6 +227,7 @@ def main():
     ap.add_argument("--px_threshold", type=float, default=8.0)
     ap.add_argument("--inlier_ratio_thresh", type=float, default=0.6)
     ap.add_argument("--coherent_fraction_thresh", type=float, default=0.5)
+    ap.add_argument("--raw_motion_px_threshold", type=float, default=100.0)
     ap.add_argument("--sweep", action="store_true", help="grid-search thresholds against labeled videos")
     args = ap.parse_args()
 
@@ -254,7 +251,8 @@ def main():
     if args.sweep:
         sweep(cache)
     else:
-        report_single(cache, args.px_threshold, args.inlier_ratio_thresh, args.coherent_fraction_thresh)
+        report_single(cache, args.px_threshold, args.inlier_ratio_thresh,
+                      args.coherent_fraction_thresh, args.raw_motion_px_threshold)
 
 
 if __name__ == "__main__":

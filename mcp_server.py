@@ -141,6 +141,7 @@ def detect_camera_motion(
     px_threshold: float = 8.0,
     inlier_ratio_thresh: float = 0.6,
     coherent_fraction_thresh: float = 0.5,
+    raw_motion_px_threshold: float = 100.0,
     fps: float = 25.0,
     min_duration_sec: float = 3.0,
 ) -> dict:
@@ -151,6 +152,7 @@ def detect_camera_motion(
             frames_dir, mask_dir, stride=stride, px_threshold=px_threshold,
             inlier_ratio_thresh=inlier_ratio_thresh,
             coherent_fraction_thresh=coherent_fraction_thresh,
+            raw_motion_px_threshold=raw_motion_px_threshold,
             fps=fps, min_duration_sec=min_duration_sec,
         )
         # samples are useful for debugging but bulky/non-essential for the
