@@ -162,7 +162,7 @@ def generate(frames_dir, mask_dir, ref0_path, out_dir, *, nframe=24, mode="singl
            "--edited_index", "0", "--resume_from_checkpoint", "best", "--val_cfg", str(cfg),
            "--img_height", str(res), "--img_width", str(res), "--sampling_interval", "1.0",
            "--nframe", str(grp_nframe), "--prompt", prompt, "--limit_frame", str(grp_nframe),
-           "--save_images", "--inference_steps", str(steps)]
+           "--save_images", "--inference_step", str(steps)]
     print(f"[mvinpainter] mode={mode}: {len(groups)} group(s) x{grp_nframe}, band y[{y0}:{y1}] steps={steps} -- cwd={MVI_ROOT}")
     subprocess.run(cmd, check=True, cwd=MVI_ROOT, env={**os.environ, **(env or {})})
 
