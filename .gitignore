@@ -40,3 +40,5 @@ eval/run_logs/
 eval/manifest.json
 eval/summary.md
 eval/summary.csv
+
+jobs/
