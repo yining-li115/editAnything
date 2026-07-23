@@ -564,7 +564,7 @@ def union_masks(
 # ─────────────────────────────────────────────────────────────────────────────
 
 FIVE_BENCH_PYTHON = os.environ.get("FIVE_BENCH_PYTHON", "/venv/five-bench/bin/python")
-
+ 
 @mcp.tool(description=TOOLS["evaluate"]["description"])
 def evaluate(
     case_id: str,
@@ -590,9 +590,9 @@ def evaluate(
         })
         if enable_mfs and not source_frames_dir:
             return _err("evaluate: source_frames_dir is required when enable_mfs=true")
-
+ 
         import json, subprocess
-
+ 
         os.makedirs(out_dir, exist_ok=True)
         case = {
             "case_id": case_id,
@@ -615,21 +615,25 @@ def evaluate(
         out_path   = os.path.join(out_dir, f"{case_id}_scores.jsonl")
         with open(cases_path, "w") as f:
             f.write(json.dumps(case) + "\n")
-
+ 
         cmd = [FIVE_BENCH_PYTHON, os.path.join(_HERE, "eval", "run_eval.py"),
                "--cases", cases_path, "--out", out_path, "--mode", mode, "--force"]
         if not enable_mfs:
             cmd.append("--no_mfs")
         if not enable_niqe:
             cmd.append("--no_niqe")
-
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
+ 
+        proc = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=3600,
+            encoding="utf-8", errors="replace",
+            env={**os.environ, "PYTHONIOENCODING": "utf-8"},
+        )
         if proc.returncode != 0:
             return _err(f"evaluate subprocess failed: {proc.stderr[-2000:]}")
-
+ 
         with open(out_path) as f:
             rec = json.loads(f.readline())
-
+ 
         return _ok(
             final_score=rec.get("final_score"),
             dimensions=rec.get("dimensions"),
