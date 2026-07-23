@@ -71,12 +71,17 @@ from components import camera_motion
 
 # ── Edit this list directly, or supply --config videos.json with the same shape ──
 VIDEOS = [
-    # {"name": "handheld_pan_1", "video_path": "raw/pan1.mp4",
-    #  "source": "cup", "label": "motion"},
-    # {"name": "tripod_1", "video_path": "raw/tripod1.mp4",
-    #  "source": "cup", "label": "static"},
-]
+    {"name": "cake-full", "video_path": "/workspace/editAnything/input/camera_motion_test/cake-full.mp4", "source": "cake", "label": "motion"},
+    {"name": "cake_first_frames",       "video_path": "/workspace/editAnything/input/camera_motion_test/cake_first_frames.mp4", "source": "cake", "label": "motion"},
+    {"name": "cup5_camera_moving_full",   "video_path": "/workspace/editAnything/input/camera_motion_test/cup5_camera_moving_full.mp4", "source": "cup", "label": "motion"},
+    {"name": "cup5-camera-moving-short_big_motion",   "video_path": "/workspace/editAnything/input/camera_motion_test/cup5-camera-moving-short_big_motion.mp4", "source": "cup", "label": "motion"},
+    {"name": "cup5-camera-moving-short_small_motion",   "video_path": "/workspace/editAnything/input/camera_motion_test/cup5-camera-moving-short_small_motion.mp4", "source": "cup", "label": "motion"},
+    {"name": "iced_coffee_with_maple_leaves",   "video_path": "/workspace/editAnything/input/camera_motion_test/iced_coffee_with_maple_leaves.mp4", "source": "iced coffee", "label": "static"},
+    {"name": "cup2",   "video_path": "/workspace/editAnything/input/cup2.mp4", "source": "cup", "label": "static"},
+    {"name": "pomelo_in_sunlight",   "video_path": "/workspace/editAnything/input/camera_motion_test/pomelo_in_sunlight.mp4", "source": "pomelo", "label": "static"},
+    {"name": "woman_holding_donut",   "video_path": "/workspace/editAnything/input/camera_motion_test/woman_holding_donut.mp4", "source": "donut", "label": "static"},
 
+]
 CACHE_PATH = os.path.join(_HERE, "camera_motion_samples_cache.json")
 OUT_ROOT = os.path.join(_HERE, "outputs")
 
