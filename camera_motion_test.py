@@ -70,7 +70,10 @@ import mcp_server as srv
 from components import camera_motion
 
 # ── Edit this list directly, or supply --config videos.json with the same shape ──
+# ── Edit this list directly, or supply --config videos.json with the same shape ──
+
 VIDEOS = [
+
     {"name": "cake-full", "video_path": "/workspace/editAnything/input/camera_motion_test/cake-full.mp4", "source": "cake", "label": "motion"},
     #{"name": "cake_first_frames",       "video_path": "/workspace/editAnything/input/camera_motion_test/cake_first_frames.mp4", "source": "cake", "label": "motion"},
     {"name": "cup5_camera_moving_full",   "video_path": "/workspace/editAnything/input/camera_motion_test/cup5_camera_moving_full.mp4", "source": "cup", "label": "motion"},
@@ -229,8 +232,8 @@ def main():
     ap.add_argument("--stride", type=int, default=6)
     ap.add_argument("--max_pairs", type=int, default=40)
     ap.add_argument("--force", action="store_true", help="recompute samples even if cached")
-    ap.add_argument("--px_threshold", type=float, default=8.0)
-    ap.add_argument("--inlier_ratio_thresh", type=float, default=0.6)
+    ap.add_argument("--px_threshold", type=float, default=60.0)
+    ap.add_argument("--inlier_ratio_thresh", type=float, default=0.3)
     ap.add_argument("--coherent_fraction_thresh", type=float, default=0.5)
     ap.add_argument("--raw_motion_px_threshold", type=float, default=100.0)
     ap.add_argument("--sweep", action="store_true", help="grid-search thresholds against labeled videos")
