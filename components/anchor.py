@@ -100,7 +100,7 @@ class MVInpainterAnchor:
     matrix). Reuses components.mvinpainter.generate() UNCHANGED for the pass."""
 
     def __init__(self, frames_dir, ref0_path, mask_dir, work_dir, *,
-                 n_views=24, prompt="", name="mvi_anchor"):
+                 n_views=24, prompt="", name="mvi_anchor", steps=None):
         self.frames_dir = frames_dir
         self.ref0_path = ref0_path
         self.mask_dir = mask_dir
@@ -108,6 +108,7 @@ class MVInpainterAnchor:
         self.n_views = n_views
         self.prompt = prompt
         self.name = name
+        self.steps = steps
         self.run_dir = os.path.join(work_dir, "mvi_anchor_run")
         self._map = None                     # sampled frame index -> anchor path
 
@@ -117,9 +118,16 @@ class MVInpainterAnchor:
         frames_out = os.path.join(self.run_dir, "frames")
         if not glob.glob(f"{frames_out}/frame_*.png"):
             from components import mvinpainter
+            kwargs = dict(mode="single", nframe=self.n_views, prompt=self.prompt, smooth=False, name=self.name)
+            if self.steps is not None:
+                kwargs["steps"] = self.steps
+
             mvinpainter.generate(self.frames_dir, self.mask_dir, self.ref0_path, self.run_dir,
-                                 mode="single", nframe=self.n_views, prompt=self.prompt,
-                                 smooth=False, name=self.name)
+                                 **kwargs)
+            
+            #mvinpainter.generate(self.frames_dir, self.mask_dir, self.ref0_path, self.run_dir,
+                   #              mode="single", nframe=self.n_views, prompt=self.prompt,
+                       #          smooth=False, name=self.name)
         self._map = {int(os.path.basename(p).split("_")[1].split(".")[0]): p
                      for p in sorted(glob.glob(f"{frames_out}/frame_*.png"))}
         if not self._map:
@@ -145,5 +153,5 @@ def get_anchor(backend, **kw):
     if backend == "mvinpainter":
         return MVInpainterAnchor(kw["frames_dir"], kw["ref0_path"], kw["mask_dir"], kw["work_dir"],
                                  n_views=kw.get("n_views", 24), prompt=kw.get("prompt", ""),
-                                 name=kw.get("name", "mvi_anchor"))
+                                 name=kw.get("name", "mvi_anchor"), steps=kw.get("steps"))
     raise ValueError(f"unknown anchor backend: {backend!r}")

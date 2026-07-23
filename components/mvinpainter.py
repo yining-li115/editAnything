@@ -32,7 +32,7 @@ from contracts import layout
 MVI_ROOT = os.environ.get("MVINPAINTER_ROOT", os.path.join(os.path.dirname(layout.ROOT), "MVInpainter"))
 MVI_PYTHON = os.environ.get("MVINPAINTER_PYTHON", "/venv/mvinpainter/bin/python")
 MVI_MODEL = os.environ.get("MVINPAINTER_MODEL", "check_points/mvinpainter_o_512")
-
+DEFAULT_STEPS = 50
 
 def _frames(d):
     return sorted(glob.glob(f"{d}/frame_*.png"))
@@ -98,7 +98,7 @@ def _encode(frame_paths, out_mp4, fps=8):
 
 def generate(frames_dir, mask_dir, ref0_path, out_dir, *, nframe=24, mode="single",
              reference_split=None, prompt="", res=512, smooth=True, feather=3.0, cfg=7.5,
-             anchors_fps=8, name="mvi_run", env=None):
+             anchors_fps=8, steps=DEFAULT_STEPS, name="mvi_run", env=None):
     """Run MVInpainter as the generator; write full-frame results to {out_dir}/frames.
 
     mode:
@@ -162,8 +162,8 @@ def generate(frames_dir, mask_dir, ref0_path, out_dir, *, nframe=24, mode="singl
            "--edited_index", "0", "--resume_from_checkpoint", "best", "--val_cfg", str(cfg),
            "--img_height", str(res), "--img_width", str(res), "--sampling_interval", "1.0",
            "--nframe", str(grp_nframe), "--prompt", prompt, "--limit_frame", str(grp_nframe),
-           "--save_images"]
-    print(f"[mvinpainter] mode={mode}: {len(groups)} group(s) x{grp_nframe}, band y[{y0}:{y1}] — cwd={MVI_ROOT}")
+           "--save_images", "--inference_steps", str(steps)]
+    print(f"[mvinpainter] mode={mode}: {len(groups)} group(s) x{grp_nframe}, band y[{y0}:{y1}] f"steps={steps} — cwd={MVI_ROOT}  ")
     subprocess.run(cmd, check=True, cwd=MVI_ROOT, env={**os.environ, **(env or {})})
 
     cand = sorted(glob.glob(os.path.join(MVI_ROOT, "outputs", name + "*")))
@@ -208,7 +208,7 @@ def generate(frames_dir, mask_dir, ref0_path, out_dir, *, nframe=24, mode="singl
 
 
 def generate_chunked(frames_dir, mask_dir, anchor_path_for_start, out_dir, *,
-                     segment_starts, chunk=20, prompt="", res=512, cfg=7.5, env=None):
+                     segment_starts, chunk=20, prompt="", res=512, cfg=7.5, steps=DEFAULT_STEPS, env=None):
     """Multi-chunk fill with MVInpainter as the per-chunk generator.
 
     Same shape as videopainter's per-segment reanchor loop, but MVInpainter fills each
@@ -242,7 +242,7 @@ def generate_chunked(frames_dir, mask_dir, anchor_path_for_start, out_dir, *,
                     os.symlink(os.path.abspath(src), dst)
         print(f"[mvinpainter] chunk {start}..{idxs[-1]}  anchor={os.path.basename(str(anchor))}", flush=True)
         fout = generate(cf, cm, str(anchor), cdir, mode="single", nframe=len(idxs),
-                        prompt=prompt, smooth=False, res=res, cfg=cfg,
+                        prompt=prompt, smooth=False, res=res, cfg=cfg, steps=steps,
                         name=f"chunk_{start:05d}", env=env)
         for p in sorted(glob.glob(f"{fout}/frame_*.png")):
             shutil.copy(p, os.path.join(final, os.path.basename(p)))
@@ -262,8 +262,10 @@ if __name__ == "__main__":
     ap.add_argument("--nframe", type=int, default=24)
     ap.add_argument("--reference_split", type=int, default=None)
     ap.add_argument("--prompt", default="")
+    ap.add_argument("--steps", type=int, default=DEFAULT_STEPS,
+                help="diffusion inference steps (test_nvs.py's --inference_step; default 50)")
     ap.add_argument("--no_smooth", action="store_true")
     args = ap.parse_args()
     generate(args.frames_dir, args.mask_dir, args.ref0, args.out_dir, mode=args.mode,
              nframe=args.nframe, reference_split=args.reference_split,
-             prompt=args.prompt, smooth=not args.no_smooth)
+             prompt=args.prompt, smooth=not args.no_smooth, steps=args.steps)

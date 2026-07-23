@@ -139,12 +139,19 @@ def detect_camera_motion(
     mask_dir: Optional[str] = None,
     stride: int = 6,
     px_threshold: float = 8.0,
+    inlier_ratio_thresh: float = 0.6,
+    coherent_fraction_thresh: float = 0.5,
+    fps: float = 25.0,
+    min_duration_sec: float = 3.0,
 ) -> dict:
     try:
         _guard("detect_camera_motion", {"frames_dir": frames_dir})
         from components import camera_motion
         result = camera_motion.detect(
-            frames_dir, mask_dir, stride=stride, px_threshold=px_threshold
+            frames_dir, mask_dir, stride=stride, px_threshold=px_threshold,
+            inlier_ratio_thresh=inlier_ratio_thresh,
+            coherent_fraction_thresh=coherent_fraction_thresh,
+            fps=fps, min_duration_sec=min_duration_sec,
         )
         # samples are useful for debugging but bulky/non-essential for the
         # orchestrator's routing decision — keep the response lean.
@@ -240,6 +247,7 @@ def mvinpainter_anchors(
     n_views: int = 24,
     prompt: str = "",
     name: str = "mvi_anchor",
+    steps: Optional[int] = None,
 ) -> dict:
     try:
         _guard("mvinpainter_anchors", {
@@ -256,6 +264,7 @@ def mvinpainter_anchors(
             n_views=n_views,
             prompt=prompt,
             name=name,
+            steps=steps,
         )
         an.prepare()
         anchor_map = {str(s): an.anchor_path_for_start(s) for s in segment_starts}
@@ -375,6 +384,7 @@ def mvinpainter_generate(
     segment_starts: list,
     prompt: str = "",
     chunk: int = 20,
+    steps: int = 50,
     resume: bool = False,
 ) -> dict:
     try:
@@ -399,7 +409,7 @@ def mvinpainter_generate(
  
         mvi.generate_chunked(
             frames_dir, mask_dir, anchor_for_start, gen_dir,
-            segment_starts=segment_starts, chunk=chunk, prompt=prompt,
+            segment_starts=segment_starts, chunk=chunk, prompt=prompt, steps=steps,
         )
         n = _count_frames(gen_frames_dir)
         return _ok(gen_frames_dir=gen_frames_dir, n_frames_generated=n)

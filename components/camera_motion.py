@@ -62,8 +62,11 @@ def detect(
     max_pairs: int = 40,
     px_threshold: float = 8.0,
     inlier_ratio_thresh: float = 0.6,
+    coherent_fraction_thresh: float = 0.5,
     min_points: int = 30,
     mask_erode_px: int = 15,
+    fps: float = 25.0,
+    min_duration_sec: float = 3.0,
 ) -> dict:
     """Return a dict describing whether the clip shows CAMERA motion.
 
@@ -73,6 +76,12 @@ def detect(
                 object can be mistaken for camera motion. Pass None only if no
                 mask exists yet (rare; the orchestrator normally calls this
                 right after sam3_mask).
+    fps, min_duration_sec: clips shorter than min_duration_sec (computed as
+                n_frames / fps) are forced to camera_motion=False WITHOUT
+                running any detection — a 2-3s clip rarely gives enough camera
+                travel for "moving vs static" to be a meaningful or reliable
+                call, and skipping it also saves the ORB/RANSAC cost. Set
+                min_duration_sec=0 to disable this gate entirely.
 
     Returns:
         {
@@ -80,18 +89,38 @@ def detect(
           "coherent_fraction": float,        # fraction of sampled pairs flagged coherent
           "median_transform_px": float,      # typical implied background displacement
           "n_pairs_sampled": int,
+          "duration_sec": float,             # n_frames / fps
+          "forced_static_short_clip": bool,  # True if the duration gate fired
           "samples": [ {i, j, n_matches, inlier_ratio, transform_px, coherent}, ... ],
         }
     """
     frames = _frames(frames_dir)
+    n_total = len(frames)
+    duration_sec = n_total / fps if fps > 0 else float("inf")
+
+    if min_duration_sec > 0 and duration_sec < min_duration_sec:
+        print(f"[camera_motion] clip is {duration_sec:.1f}s (< {min_duration_sec}s) — "
+              f"forcing camera_motion=False without running detection")
+        return {
+            "camera_motion": False,
+            "coherent_fraction": 0.0,
+            "median_transform_px": 0.0,
+            "n_pairs_sampled": 0,
+            "duration_sec": round(duration_sec, 2),
+            "forced_static_short_clip": True,
+            "samples": [],
+        }
+
     masks = _frames(mask_dir) if mask_dir else None
-    n = min(len(frames), len(masks)) if masks else len(frames)
+    n = min(len(frames), len(masks)) if masks else n_total
     if n < 2:
         return {
             "camera_motion": False,
             "coherent_fraction": 0.0,
             "median_transform_px": 0.0,
             "n_pairs_sampled": 0,
+            "duration_sec": round(duration_sec, 2),
+            "forced_static_short_clip": False,
             "samples": [],
             "reason": "fewer than 2 frames available",
         }
@@ -156,19 +185,23 @@ def detect(
             "coherent_fraction": 0.0,
             "median_transform_px": 0.0,
             "n_pairs_sampled": 0,
+            "duration_sec": round(duration_sec, 2),
+            "forced_static_short_clip": False,
             "samples": [],
             "reason": "no valid frame pairs produced enough matches",
         }
 
     coherent_fraction = sum(s["coherent"] for s in samples) / len(samples)
     median_transform_px = float(np.median([s["transform_px"] for s in samples]))
-    camera_motion = coherent_fraction >= 0.5  # majority of sampled pairs show coherent bg motion
+    camera_motion = coherent_fraction >= coherent_fraction_thresh
 
     return {
         "camera_motion": camera_motion,
         "coherent_fraction": round(coherent_fraction, 3),
         "median_transform_px": round(median_transform_px, 2),
         "n_pairs_sampled": len(samples),
+        "duration_sec": round(duration_sec, 2),
+        "forced_static_short_clip": False,
         "samples": samples,
     }
 
