@@ -163,7 +163,7 @@ def generate(frames_dir, mask_dir, ref0_path, out_dir, *, nframe=24, mode="singl
            "--img_height", str(res), "--img_width", str(res), "--sampling_interval", "1.0",
            "--nframe", str(grp_nframe), "--prompt", prompt, "--limit_frame", str(grp_nframe),
            "--save_images", "--inference_steps", str(steps)]
-    print(f"[mvinpainter] mode={mode}: {len(groups)} group(s) x{grp_nframe}, band y[{y0}:{y1}] f"steps={steps} — cwd={MVI_ROOT}  ")
+    print(f"[mvinpainter] mode={mode}: {len(groups)} group(s) x{grp_nframe}, band y[{y0}:{y1}] steps={steps} -- cwd={MVI_ROOT}")
     subprocess.run(cmd, check=True, cwd=MVI_ROOT, env={**os.environ, **(env or {})})
 
     cand = sorted(glob.glob(os.path.join(MVI_ROOT, "outputs", name + "*")))
