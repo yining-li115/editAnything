@@ -158,8 +158,11 @@ SYSTEM_PROMPT = (
     "If a tool call fails, inspect the error and either fix the arguments and "
     "retry, or report the failure clearly. When the pipeline is done, report the "
     "final video path and evaluation scores to the user."
-    "Compute segment_starts automatically as [0, 48, 96, ...] every 48 frames "
-    "up to n_frames, with a tail window so the last 49 frames are always covered. "
+    "Compute segment_starts automatically as [0, 20, 40, 60, ...] every 20 frames "
+    "when using mvinpainter_generate (camera_motion=True, pan/dolly/zoom detected), "
+    "or [0, 48, 96, ...] every 48 frames when using videopainter_generate "
+    "(camera_motion=False, static camera). detect_camera_motion returns camera_motion "
+    "boolean — use it to pick the right stride."
     + ("ROSE removal is DISABLED — the rose_removal tool is unavailable, do not attempt it. "
        "For composite, use the ORIGINAL frames (frames_dir) as bg_frames_dir. " if DISABLE_ROSE else "")
 )

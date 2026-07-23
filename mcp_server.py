@@ -250,6 +250,7 @@ def mvinpainter_anchors(
     prompt: str = "",
     name: str = "mvi_anchor",
     steps: Optional[int] = None,
+    chunk: int = 20,
 ) -> dict:
     try:
         _guard("mvinpainter_anchors", {
@@ -257,6 +258,13 @@ def mvinpainter_anchors(
             "work_dir": work_dir, "segment_starts": segment_starts,
         })
         from components.anchor import get_anchor
+        
+        # Auto-adjust segment_starts to match chunk size
+        if len(segment_starts) > 1 and segment_starts[1] == 48:
+            n_frames = _count_frames(frames_dir)
+            segment_starts = list(range(0, n_frames, chunk)) or [0]
+            print(f"[mvinpainter_anchors] auto-adjusted segment_starts to chunk={chunk}: {segment_starts[:5]}{'...' if len(segment_starts) > 5 else ''}")
+        
         an = get_anchor(
             "mvinpainter",
             frames_dir=frames_dir,
@@ -270,7 +278,7 @@ def mvinpainter_anchors(
         )
         an.prepare()
         anchor_map = {str(s): an.anchor_path_for_start(s) for s in segment_starts}
-        return _ok(anchor_map=anchor_map)
+        return _ok(anchor_map=anchor_map, segment_starts=segment_starts)
     except Exception as e:
         return _err(f"mvinpainter_anchors failed: {e}", e)
 

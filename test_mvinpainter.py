@@ -94,7 +94,8 @@ def main():
         work_dir=os.path.join(out_root, "roma")))
     edit_mask_dir = r["mask_dir"]
 
-    segment_starts = list(range(0, n_frames, 48)) or [0]
+    chunk_size = args.chunk  # default 20
+    segment_starts = list(range(0, n_frames, chunk_size)) or [0]
     print(f"\n>>> segment_starts = {segment_starts}")
 
     # 6. mvinpainter anchors

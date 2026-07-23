@@ -148,7 +148,7 @@ TOOLS: dict = {
             "Per-segment anchors via MVInpainter's own multi-view pass instead "
             "of RoMa warping — stays clean at large viewpoint changes where "
             "RoMa shears. Use with mvinpainter_generate when camera_motion=true. "
-            "Slower (subprocess in its own env)."
+            "Slower (subprocess in its own env). Auto-adjusts segment_starts to match chunk size."
         ),
         "inputs": {
             "frames_dir":      {"type": "string", "description": "Source frames directory."},
@@ -161,15 +161,19 @@ TOOLS: dict = {
             "prompt":          {"type": "string",  "description": "Generation prompt for the anchor pass.", "default": ""},
             "name":            {"type": "string",  "description": "Run name for the anchor pass's output folder.", "default": "mvi_anchor"},
             "steps":           {"type": ["integer", "null"], "description": "Diffusion inference steps (default 50); lower = faster, some quality cost. null = component default.", "default": None},
+            "chunk":           {"type": "integer", "description": "Frame chunk size for mvinpainter_generate; auto-adjusts segment_starts if it detects 48-frame stride.", "default": 20},
         },
         "outputs": {
             "anchor_map": {
                 "type": "object",
                 "description": "Dict mapping str(start) -> absolute anchor image path.",
             },
+            "segment_starts": {
+                "type": "array",
+                "description": "Auto-adjusted segment_starts if they were recomputed to match chunk size, otherwise echoes input.",
+            },
         },
     },
-
 
     # ------------------------------------------------------------------
     # T6 — Gemini frame-0 edit (generate the ref0)
