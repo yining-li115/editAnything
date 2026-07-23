@@ -13,8 +13,10 @@ Method (Option A — background-only homography/RANSAC):
     - a large fraction of background matches agree with ONE global transform
       (high inlier ratio) -- i.e. the background really is moving as a rigid
       plane/rotation, not just noisy mismatches, AND
-    - that transform implies a non-trivial pixel displacement across the
-      frame (i.e. it's not just tripod micro-jitter).
+    - that transform implies a non-trivial displacement across the frame
+      (i.e. it's not just tripod micro-jitter). Displacement is measured as a
+      FRACTION of the frame diagonal, not raw pixels, so thresholds hold at
+      any input resolution.
   The video is flagged camera_motion=True if a majority of sampled pairs are
   coherent.
 
@@ -47,11 +49,21 @@ def _background_mask(mask_gray: np.ndarray | None, erode_px: int = 15) -> np.nda
 
 
 def _transform_magnitude(H: np.ndarray, w: int, h: int) -> float:
-    """Max corner displacement implied by homography H, in pixels."""
+    """Max corner displacement implied by homography H, as a FRACTION of the
+    frame diagonal (not raw pixels).
+
+    Normalizing matters because the same camera motion produces proportionally
+    larger pixel displacements at higher resolution — a clip at 1920x1080 and
+    the same clip at 854x480 would otherwise measure ~2.2x apart, so thresholds
+    tuned at one resolution silently break at another. Dividing by the diagonal
+    makes the number comparable across any input size.
+    """
     corners = np.float32([[0, 0], [w, 0], [0, h], [w, h]]).reshape(-1, 1, 2)
     warped = cv2.perspectiveTransform(corners, H).reshape(-1, 2)
     orig = corners.reshape(-1, 2)
-    return float(np.max(np.linalg.norm(warped - orig, axis=1)))
+    max_disp_px = float(np.max(np.linalg.norm(warped - orig, axis=1)))
+    diagonal = float(np.hypot(w, h))
+    return max_disp_px / diagonal if diagonal > 0 else 0.0
 
 
 def detect(
@@ -60,10 +72,10 @@ def detect(
     *,
     stride: int = 6,
     max_pairs: int = 40,
-    px_threshold: float = 60.0,
+    transform_frac_threshold: float = 0.027,
     inlier_ratio_thresh: float = 0.3,
     coherent_fraction_thresh: float = 0.5,
-    raw_motion_px_threshold: float = 100.0,
+    raw_motion_frac_threshold: float = 0.045,
     min_points: int = 30,
     mask_erode_px: int = 15,
     fps: float = 25.0,
@@ -88,8 +100,8 @@ def detect(
     correctly models pure camera rotation or a flat/planar scene:
       - "coherent" (Signal A): coherent_fraction >= coherent_fraction_thresh —
         a single global transform explains a high fraction of background
-        matches, above px_threshold. Works well for pans/rotation/zoom.
-      - "raw motion" (Signal B): median_transform_px >= raw_motion_px_threshold
+        matches, above transform_frac_threshold. Works for pans/rotation/zoom.
+      - "raw motion" (Signal B): median_transform_frac >= raw_motion_frac_threshold
         — catches translating (dolly/handheld) cameras with real scene depth
         (parallax), where no single homography fits well so inlier_ratio (and
         therefore coherent_fraction) stays low even though the background is
@@ -100,13 +112,13 @@ def detect(
         {
           "camera_motion": bool,
           "coherent_fraction": float,        # fraction of sampled pairs flagged coherent
-          "median_transform_px": float,      # typical implied background displacement
+          "median_transform_frac": float,    # typical implied bg displacement, as a fraction of frame diagonal
           "coherent_signal": bool,           # Signal A fired
           "raw_motion_signal": bool,         # Signal B fired
           "n_pairs_sampled": int,
           "duration_sec": float,             # n_frames / fps
           "forced_static_short_clip": bool,  # True if the duration gate fired
-          "samples": [ {i, j, n_matches, inlier_ratio, transform_px, coherent}, ... ],
+          "samples": [ {i, j, n_matches, inlier_ratio, transform_frac, coherent}, ... ],
         }
     """
     frames = _frames(frames_dir)
@@ -119,7 +131,7 @@ def detect(
         return {
             "camera_motion": False,
             "coherent_fraction": 0.0,
-            "median_transform_px": 0.0,
+            "median_transform_frac": 0.0,
             "coherent_signal": False,
             "raw_motion_signal": False,
             "n_pairs_sampled": 0,
@@ -134,7 +146,7 @@ def detect(
         return {
             "camera_motion": False,
             "coherent_fraction": 0.0,
-            "median_transform_px": 0.0,
+            "median_transform_frac": 0.0,
             "coherent_signal": False,
             "raw_motion_signal": False,
             "n_pairs_sampled": 0,
@@ -171,13 +183,13 @@ def detect(
         kp2, des2 = orb.detectAndCompute(img2, bg2)
         if des1 is None or des2 is None or len(kp1) < min_points or len(kp2) < min_points:
             samples.append({"i": i, "j": j, "n_matches": 0, "inlier_ratio": 0.0,
-                             "transform_px": 0.0, "coherent": False})
+                             "transform_frac": 0.0, "coherent": False})
             continue
 
         matches = sorted(bf.match(des1, des2), key=lambda m: m.distance)[:400]
         if len(matches) < min_points:
             samples.append({"i": i, "j": j, "n_matches": len(matches), "inlier_ratio": 0.0,
-                             "transform_px": 0.0, "coherent": False})
+                             "transform_frac": 0.0, "coherent": False})
             continue
 
         pts1 = np.float32([kp1[m.queryIdx].pt for m in matches]).reshape(-1, 1, 2)
@@ -185,16 +197,16 @@ def detect(
         H, inliers = cv2.findHomography(pts1, pts2, cv2.RANSAC, 3.0)
         if H is None or inliers is None:
             samples.append({"i": i, "j": j, "n_matches": len(matches), "inlier_ratio": 0.0,
-                             "transform_px": 0.0, "coherent": False})
+                             "transform_frac": 0.0, "coherent": False})
             continue
 
         inlier_ratio = float(inliers.sum()) / len(inliers)
-        transform_px = _transform_magnitude(H, w, h)
-        coherent = inlier_ratio >= inlier_ratio_thresh and transform_px >= px_threshold
+        transform_frac = _transform_magnitude(H, w, h)
+        coherent = inlier_ratio >= inlier_ratio_thresh and transform_frac >= transform_frac_threshold
         samples.append({
             "i": i, "j": j, "n_matches": len(matches),
             "inlier_ratio": round(inlier_ratio, 3),
-            "transform_px": round(transform_px, 2),
+            "transform_frac": round(transform_frac, 4),
             "coherent": coherent,
         })
 
@@ -202,7 +214,7 @@ def detect(
         return {
             "camera_motion": False,
             "coherent_fraction": 0.0,
-            "median_transform_px": 0.0,
+            "median_transform_frac": 0.0,
             "coherent_signal": False,
             "raw_motion_signal": False,
             "n_pairs_sampled": 0,
@@ -213,16 +225,16 @@ def detect(
         }
 
     coherent_fraction = sum(s["coherent"] for s in samples) / len(samples)
-    median_transform_px = float(np.median([s["transform_px"] for s in samples]))
+    median_transform_frac = float(np.median([s["transform_frac"] for s in samples]))
 
     coherent_signal = coherent_fraction >= coherent_fraction_thresh
-    raw_motion_signal = median_transform_px >= raw_motion_px_threshold
+    raw_motion_signal = median_transform_frac >= raw_motion_frac_threshold
     camera_motion = coherent_signal or raw_motion_signal
 
     return {
         "camera_motion": camera_motion,
         "coherent_fraction": round(coherent_fraction, 3),
-        "median_transform_px": round(median_transform_px, 2),
+        "median_transform_frac": round(median_transform_frac, 4),
         "coherent_signal": coherent_signal,
         "raw_motion_signal": raw_motion_signal,
         "n_pairs_sampled": len(samples),
@@ -240,8 +252,15 @@ if __name__ == "__main__":
     ap.add_argument("--frames_dir", required=True)
     ap.add_argument("--mask_dir", default=None, help="per-frame SOURCE object mask (recommended)")
     ap.add_argument("--stride", type=int, default=6)
-    ap.add_argument("--px_threshold", type=float, default=8.0)
+    ap.add_argument("--transform_frac_threshold", type=float, default=0.027)
+    ap.add_argument("--inlier_ratio_thresh", type=float, default=0.3)
+    ap.add_argument("--coherent_fraction_thresh", type=float, default=0.5)
+    ap.add_argument("--raw_motion_frac_threshold", type=float, default=0.045)
     args = ap.parse_args()
-    result = detect(args.frames_dir, args.mask_dir, stride=args.stride, px_threshold=args.px_threshold)
+    result = detect(args.frames_dir, args.mask_dir, stride=args.stride,
+                    transform_frac_threshold=args.transform_frac_threshold,
+                    inlier_ratio_thresh=args.inlier_ratio_thresh,
+                    coherent_fraction_thresh=args.coherent_fraction_thresh,
+                    raw_motion_frac_threshold=args.raw_motion_frac_threshold)
     print(json.dumps({k: v for k, v in result.items() if k != "samples"}, indent=2))
     print(f"camera_motion = {result['camera_motion']}")
