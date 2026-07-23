@@ -143,7 +143,7 @@ def detect_camera_motion(
     coherent_fraction_thresh: float = 0.5,
     raw_motion_px_threshold: float = 100.0,
     fps: float = 25.0,
-    min_duration_sec: float = 3.0,
+    min_duration_sec: float = 3.5,
 ) -> dict:
     try:
         _guard("detect_camera_motion", {"frames_dir": frames_dir})

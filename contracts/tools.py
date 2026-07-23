@@ -80,7 +80,7 @@ TOOLS: dict = {
             "coherent_fraction_thresh": {"type": "number", "description": "Min fraction of coherent pairs needed for camera_motion=true.", "default": 0.5},
             "raw_motion_px_threshold": {"type": "number", "description": "Fallback: median displacement (px) alone triggers camera_motion=true even without a coherent homography (catches parallax).", "default": 100.0},
             "fps":           {"type": "number", "description": "Clip fps, used for the min_duration_sec gate.", "default": 25.0},
-            "min_duration_sec": {"type": "number", "description": "Clips shorter than this are forced camera_motion=false, skipping detection. 0 disables.", "default": 3.0},
+            "min_duration_sec": {"type": "number", "description": "Clips shorter than this are forced camera_motion=false, skipping detection. 0 disables.", "default": 3.5},
         },
         "outputs": {
             "camera_motion":        {"type": "boolean", "description": "True if the clip shows camera motion."},
